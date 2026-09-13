@@ -33,6 +33,7 @@ public:
 
 	// ─── Queries (read CombinedTags — refcount > 0 projection) ───
 
+	/** Whether the entity has this tag or a child tag. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Tags", meta = (WorldContext = "WorldContextObject", DisplayName = "Has Tag"))
 	static bool SeinHasTag(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FGameplayTag Tag);
 
@@ -65,6 +66,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Tags", meta = (WorldContext = "WorldContextObject", DisplayName = "Grant Tag"))
 	static void SeinGrantTag(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FGameplayTag Tag);
 
+	/** Release one matching grant previously acquired by this logic. This does not identify a source; an unmatched release can consume another source's grant. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Tags", meta = (WorldContext = "WorldContextObject", DisplayName = "Ungrant Tag"))
 	static void SeinUngrantTag(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, FGameplayTag Tag);
 

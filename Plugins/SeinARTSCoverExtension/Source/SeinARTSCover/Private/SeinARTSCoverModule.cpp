@@ -86,6 +86,7 @@ void FSeinARTSCoverModule::StartupModule()
 	}
 
 	FSeinSimulationContentContributorDescriptor ContentDescriptor;
+	ContentDescriptor.OwnerModule = TEXT("SeinARTSCover");
 	ContentDescriptor.StableContributorId = TEXT("seinarts.cover");
 	ContentDescriptor.ContributorRevision = 1;
 	ContentDescriptor.DiscoveryRoots = {

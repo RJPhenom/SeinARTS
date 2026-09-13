@@ -46,6 +46,8 @@ struct SEINARTSCOREENTITY_API FSeinSimulationContentContributorDescriptor
 	TArray<FSeinSimulationContentDiscoveryRoot> DiscoveryRoots;
 	/** Canonical long package names that seed dependency closure directly. */
 	TArray<FString> ExplicitPackageRoots;
+	/** Cook admission metadata, not part of the semantic discovery digest. */
+	FName OwnerModule;
 };
 
 /** Canonical registered contributor plus its self-proving discovery contract. */
@@ -56,6 +58,7 @@ struct SEINARTSCOREENTITY_API FSeinFrozenSimulationContentContributor
 	FGuid DiscoveryContractDigest;
 	TArray<FSeinSimulationContentDiscoveryRoot> DiscoveryRoots;
 	TArray<FString> ExplicitPackageRoots;
+	FName OwnerModule;
 };
 
 /**

@@ -125,24 +125,21 @@ USeinEconomyConstructTestAbility::USeinEconomyConstructTestAbility()
 	TargetType = ESeinAbilityTargetType::Entity;
 }
 
-void USeinEconomyConstructTestAbility::OnTick_Implementation(
-	FFixedPoint DeltaTime)
+void USeinEconomyConstructTestAbility::OnActivate_Implementation()
 {
-	if (!WorldSubsystem || !TargetEntity.IsValid()
-		|| BuildRate <= FFixedPoint::Zero)
-	{
-		CancelAbility();
-		return;
-	}
+	Construction = USeinConstructionBPFL::SeinGetConstructionStatus(WorldSubsystem, TargetEntity).Construction;
+	USeinConstructionBPFL::SeinStartConstruction(WorldSubsystem, Construction);
+}
 
-	if (USeinConstructionBPFL::SeinAddConstructionProgress(
-			WorldSubsystem, TargetEntity, BuildRate * DeltaTime))
+void USeinEconomyConstructTestAbility::OnTick_Implementation(FFixedPoint DeltaTime)
+{
+	const ESeinConstructionResult Result = USeinConstructionBPFL::SeinAdvanceConstruction(
+		WorldSubsystem, Construction, BuildRate * DeltaTime);
+	if (Result == ESeinConstructionResult::ReadyToComplete)
 	{
+		USeinConstructionBPFL::SeinCompleteConstruction(WorldSubsystem, Construction);
 		EndAbility();
 	}
-	else if (!USeinConstructionBPFL::SeinIsUnderConstruction(
-		WorldSubsystem, TargetEntity))
-	{
-		CancelAbility();
-	}
+	else if (Result == ESeinConstructionResult::AlreadyComplete) EndAbility();
+	else if (Result != ESeinConstructionResult::Succeeded) CancelAbility();
 }

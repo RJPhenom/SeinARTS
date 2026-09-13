@@ -41,7 +41,7 @@ simulation-content manifest.
 
 For every selected profile the tool:
 
-1. rejects references to host `/Game/SeinARTS` packages;
+1. rejects host example-content dependencies in source/config and serialized assets;
 2. optionally compiles every production `Public` header in its own non-unity, no-PCH consumer
    translation unit, then builds a fresh UE 5.8 Development Editor target;
 3. generates and reloads the consumer's simulation-content manifest;
@@ -89,6 +89,13 @@ then publishes; an interrupted run resumes only an exact matching draft. The man
 Windows workflow at `.github/workflows/release-gate.yml` invokes this same entrypoint on a runner
 with UE 5.8 and Client/Server target support.
 
+Host example-path screening scans ANSI and both UTF-16 byte alignments. Binary matches are
+classified by the consumer editor after building: hard/soft package dependencies and live object
+serialization are checked before ordinary save callbacks, then a disposable package copy is scanned.
+Only level-origin URLs and the bridge's two retained editor inheritance-history arrays are excluded
+in that audit process. Original packages are never saved, and their hashes must remain unchanged.
+The history remains in distributed assets because unopened levels need it for default reconciliation.
+
 ## Consumer integration and upgrade contract
 
 UE 5.8 on Win64 is the qualified baseline. A consumer installs either one complete release-ZIP
@@ -100,7 +107,8 @@ The consuming project owns its maps, gameplay classes, settings, Simulation Cont
 baked level data. Host assets under `/Game/SeinARTSExamples` are references, not distributable
 dependencies. A minimal playable integration uses project-owned `ASeinActor` subclasses and
 component templates, unique `ASeinPlayerStart` slots, an `ASeinLevelVolume` with baked data, and a
-project-owned manifest regenerated after simulation content or enabled-plugin changes.
+automatic build-owned compatibility evidence produced by cook. Ordinary editor iteration needs no
+saved manifest asset; the optional saved reference is only for explicit strict recovery testing.
 
 `Scripts/Diagnostics/Test-SeinARTSInstallation.ps1` is the read-only installation authority. Use
 `-Json` when evidence must be retained; its live implementation owns the stable finding codes and
@@ -108,7 +116,7 @@ actions. Do not weaken manifest, schema, digest, fingerprint, or behavior-revisi
 an old peer, snapshot, replay, or reconnect payload.
 
 An upgrade replaces the complete plugin cohort, fully restarts the Editor after reflected changes,
-rebuilds Editor and Shipping, regenerates the manifest, re-bakes required level data, and repeats the
+rebuilds Editor and Shipping, cooks fresh compatibility evidence, re-bakes required level data, and repeats the
 relevant automated, consumer, multiplayer, replay/resync, and PIE gates. Retain the producing build
 when incompatible persisted evidence must remain inspectable.
 
@@ -156,6 +164,36 @@ source/installed UE build and CI runner must therefore prove Development Client 
 Server binaries and repeat the runtime topology with a true headless server. The local listen-
 server qualification is real packaged multiplayer evidence, but it is not a substitute for that
 dedicated-target gate or the remaining human PIE oracles.
+
+On 2026-09-13 the checkpoint's repository-source Framework consumer passed Editor and Shipping,
+installation diagnostics, automatic cook compatibility, exact map loads, packaging, and packaged
+two-player travel, root gossip, checkpoint-tail resync, physical reconnect, capability persistence,
+and replay checkpoint seek. Matrix run `34fbe5d5f0ec42aead9852930e57d708` ended at tick 2342 with
+canonical root `9F9341D3859484A1F39663250732126D`; runtime receipt SHA-256 is
+`9380CE4D2F20D0D948BD58AB8939810EA4EEB4E628B2CE4EC2778368EC8A7CFA`.
+This run uses source inputs and the launcher-engine listen-server topology; public-header audit,
+Client/Server targets, adverse networking, and other consumer profiles were not qualified here.
+The intended Consumer delivery remains an iteration prerelease, not a milestone release-gate result.
+
+The run exposed missing seamless-travel controller rebinding: the same valid client identity
+was rejected because the destination lobby never recovered its ownership records. Engine-handoff
+automation now covers accepted and rejected replacements, and native tests cover exact-seat
+authorization, stale logout, conflicting ownership, foreign worlds, and wrong reconnect identities.
+The existing terrain, abstract-selection, UDS save, and replay-worker fixtures were also corrected
+to establish their required state. Integration runners keep the RHI for Canvas pixel assertions.
+
+Final checkpoint validation passed all 15 steps in
+`Saved/Validation/1dec40b070344a2fba2e0f6838090b52/validation-result.json`: 1,789 test executions
+across twelve All/Framework suite runs, a 120-frame fresh-process serial/parallel comparison,
+and the host Shipping build. Validation orchestration passed 60 self-checks
+(`Saved/ValidationSelfTest/97d3aad385944e4daf684823ce012ff3/self-test-result.json`), and installation
+diagnostic adversarial fixtures passed on Windows PowerShell 5.1. Independent review found no
+blocking defect in the admission fixes. These automated results do not certify the outstanding
+human PIE oracles or the omitted milestone consumer matrix.
+The staged-new-file check subsequently removed surplus terminal blank lines from twelve source
+files only. Final Editor (`Saved/Build/e6b2c199768b411b87e516e9c2c78e14/build-result.json`) and
+Shipping (`Saved/Build/04ad11826f2844ebabfe03772df8c569/build-result.json`) builds passed afterward;
+no behavior changed after the full suite run.
 
 The generated projects, packages, logs, and temporary Python scripts are regenerable and should be
 deleted after evidence is recorded. Do not commit `Saved/ConsumerMatrix`.

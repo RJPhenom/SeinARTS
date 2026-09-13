@@ -91,6 +91,8 @@ try {
                 $Evidence = Join-Path $RunRoot "$CurrentProfile-$CurrentSuite.json"
                 $Arguments = @{ Suite = $CurrentSuite; Profile = $CurrentProfile
                     QuietBuild = $true; ResultFile = $Evidence; TimeoutSeconds = $TimeoutSeconds
+                    # Integration includes Canvas pixel assertions that require a real RHI.
+                    KeepRendering = ($CurrentSuite -match '^SeinARTS\.Integration(?:\.|$)')
                     SkipBuild = ($SkipBuild -or -not $First) }
                 if ($EngineRoot) { $Arguments.EngineRoot = $EngineRoot }
                 Invoke-ValidationStep "$CurrentProfile $CurrentSuite" {

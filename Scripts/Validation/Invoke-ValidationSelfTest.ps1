@@ -56,7 +56,7 @@ exit /b 0
 '@ | Set-Content -LiteralPath $BuildBat -Encoding ASCII
     # A fake producer lets us verify orchestration and admission independently of UE availability.
     $Stub = @'
-param([string]$Suite,[string]$Profile,[switch]$SkipBuild,[switch]$QuietBuild,
+param([string]$Suite,[string]$Profile,[switch]$SkipBuild,[switch]$QuietBuild,[switch]$KeepRendering,
     [string]$ResultFile,[string]$EngineRoot,[int]$TimeoutSeconds,[switch]$AllowKnownStartupErrors)
 $ErrorActionPreference='Stop'
 $Mode=$env:SEIN_VALIDATION_FIXTURE_MODE
@@ -95,7 +95,7 @@ $Attempt=[ordered]@{schemaVersion=4;status='Passed';suite=$Suite;profile=$Profil
     testIndexFile='index.json';testIndexSha256=(Get-FileHash (Join-Path $Report 'index.json')).Hash
     testBuildProvenanceFile='build-provenance.json'
     testBuildProvenanceSha256=(Get-FileHash (Join-Path $Report 'build-provenance.json')).Hash
-    reportPath=$Report;skipBuild=[bool]$SkipBuild;timeoutSeconds=$TimeoutSeconds}
+    reportPath=$Report;skipBuild=[bool]$SkipBuild;keepRendering=[bool]$KeepRendering;timeoutSeconds=$TimeoutSeconds}
 if($Mode -eq 'wrong-profile'){$Attempt.profile='Wrong'}
 if($Mode -eq 'same-process'){$Attempt.editorProcessId=101}
 if($Mode -eq 'zero-tests'){$Attempt.discoveredTestCount=0}
@@ -220,6 +220,35 @@ exit 0
     $Receipts=@($Full[0].steps | Where-Object { $_.name -match '^(All|Framework) SeinARTS\.' } |
         ForEach-Object { Get-Content -Raw $_.evidence | ConvertFrom-Json })
     Check (@($Receipts | Where-Object { -not $_.skipBuild }).Count -eq 2) 'Full builds once per profile'
+    Check (@($Receipts | Where-Object { $_.suite -eq 'SeinARTS.Integration' -and $_.keepRendering }).Count -eq 2) 'Both integration profiles retain rendering for pixel assertions'
+    Check (@($Receipts | Where-Object { $_.suite -ne 'SeinARTS.Integration' -and $_.keepRendering }).Count -eq 0) 'Non-rendering suites retain NullRHI'
+
+    $ConsumerAst=[System.Management.Automation.Language.Parser]::ParseFile(
+        (Join-Path $RepoRoot 'Scripts/ConsumerMatrix/Verify-ConsumerMatrix.ps1'),[ref]$null,[ref]$null)
+    foreach($FunctionName in @('Assert-NoHostGameDependency','Write-Utf8NoBom')) {
+        $Function=$ConsumerAst.Find({param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq $FunctionName},$true)
+        . ([scriptblock]::Create($Function.Extent.Text))
+    }
+    $ConsumerFixture=Join-Path $Root 'Consumer'
+    New-Item -ItemType Directory -Path $ConsumerFixture -Force | Out-Null
+    $Candidate=Join-Path $ConsumerFixture 'Fixture.uasset'
+    $Wide=[System.Text.Encoding]::Unicode.GetBytes('/Game/SeinARTSExamples/Live')
+    [System.IO.File]::WriteAllBytes($Candidate,([byte[]]@(0x7F)+$Wide))
+    $script:AuditInvoked=$false
+    $EditorCmd='fixture'
+    function Invoke-Checked { $script:AuditInvoked=$true; throw 'fixture asset rejection' }
+    $Rejected=$false
+    try { Assert-NoHostGameDependency $ConsumerFixture -AuditAssets } catch { $Rejected=$true }
+    Check ($Rejected -and $script:AuditInvoked) 'Odd-offset UTF16 package paths reach the mandatory Unreal audit and propagate rejection'
+    function Invoke-Checked { $script:AuditInvoked=$true }
+    $script:AuditInvoked=$false
+    Assert-NoHostGameDependency $ConsumerFixture -AuditAssets
+    Check $script:AuditInvoked 'Classified package strings require a successful Unreal audit'
+    $Config=Join-Path $ConsumerFixture 'DefaultGame.ini'
+    '/Game/SeinARTSExamples/Live' | Set-Content -LiteralPath $Config
+    $script:AuditInvoked=$false;$Rejected=$false
+    try { Assert-NoHostGameDependency $ConsumerFixture -AuditAssets } catch { $Rejected=$true }
+    Check ($Rejected -and -not $script:AuditInvoked) 'Host paths in text fail before package classification'
     [ordered]@{status='Passed';shell=$Shell;checks=@($Checks);fixtureRoot=$Fixture} |
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Root 'self-test-result.json')
     Write-Host "[ValidationSelfTest] Passed $($Checks.Count) checks. Receipt: $Root/self-test-result.json"

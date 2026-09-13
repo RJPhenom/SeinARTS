@@ -1484,6 +1484,30 @@ bool USeinNetSubsystem::GetAuthorizedConnectionSlot(
 	return true;
 }
 
+bool USeinNetSubsystem::TransferAuthorizedConnection(
+	APlayerController* OldController, APlayerController* NewController,
+	FSeinPlayerID ExpectedSlot)
+{
+	check(IsInGameThread());
+	if (!GetWorld() || GetWorld()->GetNetMode() == NM_Client
+		|| !IsValid(OldController) || !IsValid(NewController)
+		|| OldController->GetGameInstance() != GetGameInstance()
+		|| OldController->GetWorld() != GetWorld()
+		|| NewController->GetWorld() != GetWorld() || !ExpectedSlot.IsValid()) return false;
+	if (!HasConnectionAdmissionAuthorizer()) return true;
+	const FSeinPlayerID* Existing = AuthorizedControllerSlots.Find(OldController);
+	if (!Existing || *Existing != ExpectedSlot) return false;
+	for (const auto& Pair : AuthorizedControllerSlots)
+	{
+		if (Pair.Key.Get() == OldController) continue;
+		if (Pair.Key.Get() == NewController
+			|| (Pair.Key.IsValid() && Pair.Value == ExpectedSlot)) return false;
+	}
+	AuthorizedControllerSlots.Remove(OldController);
+	AuthorizedControllerSlots.Add(NewController, ExpectedSlot);
+	return true;
+}
+
 void USeinNetSubsystem::ReleaseAuthorizedConnection(
 	APlayerController* Controller)
 {

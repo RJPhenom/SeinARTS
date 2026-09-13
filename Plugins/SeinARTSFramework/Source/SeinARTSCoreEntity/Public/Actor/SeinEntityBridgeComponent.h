@@ -59,6 +59,7 @@ class FObjectPreSaveContext;
 class USeinEntityComponent;
 class USeinWorldSubsystem;
 struct FSeinVisualEvent;
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FSeinBridgePresentationRefresh);
 
 /** Editor-only inheritance history for one Blueprint ComponentData property.
  * Stored on the class-default bridge so an unopened level can later decide
@@ -466,15 +467,6 @@ public:
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Sync")
 	bool IsTransformSyncEnabled() const { return bSyncTransform; }
 
-	/** Presentation-only settled displacement between the captured sim poses.
-	 *  Zero after initialization, restore, or a catch-up frame that snaps poses. */
-	FVector GetCapturedSimDisplacement() const
-	{
-		return bHasSimSnapshot
-			? CurrentSimTransform.Location.ToVector() - PreviousSimTransform.Location.ToVector()
-			: FVector::ZeroVector;
-	}
-
 	/** Apply RayTracingGeometryPolicy to the owner's current primitive
 	 *  components. ASeinActor applies it after component registration in editor
 	 *  and runtime worlds, then BeginPlay reapplies it for runtime safety. Call
@@ -513,6 +505,13 @@ public:
 	 *  event the bridge subsystem routes to this entity. */
 	UPROPERTY(BlueprintAssignable, Category = "SeinARTS")
 	FOnSeinEntityVisualEvent OnVisualEvent;
+
+	/** Refresh bound visuals from current entity data after assignment or save restoration. */
+	UPROPERTY(BlueprintAssignable, Category = "SeinARTS")
+	FSeinBridgePresentationRefresh OnPresentationRefresh;
+
+	/** Refresh current presentation without replaying gameplay or transition effects. */
+	void RefreshPresentation();
 
 protected:
 	/** Generational entity handle this component represents */

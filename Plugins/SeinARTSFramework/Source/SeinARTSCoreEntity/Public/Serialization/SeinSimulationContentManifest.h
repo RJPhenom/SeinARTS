@@ -156,8 +156,17 @@ class SEINARTSCOREENTITY_API FSeinSimulationContentManifestCodec
 {
 public:
 	static constexpr uint32 CurrentFormatVersion = 1;
+	/** Uncooked Play uses code-contract compatibility without reading saved assets.
+	 *  Strict editor testing can explicitly select saved-manifest evidence. */
+	static bool UsesEditorSessionCompatibility();
+	/** Whether this profile carries the reserved development-session domain. */
+	static bool IsEditorSessionProfile(const FSeinSimulationContentManifestProfile& Profile);
+	static bool BuildEditorSessionProfile(
+		TConstArrayView<FSeinSimulationContentContributorRecord> Contributors,
+		FSeinSimulationContentManifestProfile& OutProfile,
+		FString& OutError);
 	/** Exact editor inclusion/canonicalization contract accepted at runtime. */
-	static constexpr uint32 CurrentBuilderRevision = 1;
+	static constexpr uint32 CurrentBuilderRevision = 2;
 	static const TCHAR* GetCurrentRecordKindId()
 	{
 		return TEXT("unreal.package");

@@ -6,6 +6,9 @@
 #include "Util/SeinDataComponentSync.h"
 #include "Util/SeinDeterminismRules.h"
 #include "Factories/SeinSimComponentFactory.h"
+#include "SeinARTSGraphNodesModule.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "BlueprintActionDatabase.h"
 
 #include "Authoring/SeinEntityComponent.h"
 #include "Authoring/SeinPayloadStruct.h"
@@ -117,7 +120,8 @@ namespace
 		// USeinPayloadStruct, whose IsAsset() == false keeps it out of the
 		// asset registry and Content Browser permanently — packageness alone
 		// would make a plain UDS an asset again on the next registry scan. It
-		// saves, moves, and deletes atomically with the component asset.
+		// saves with the component package; SeinComponentDeletion includes it
+		// in owner deletion even if a Blueprint move left it in the old package.
 		// (Construction mirrors FStructureEditorUtils::CreateUserDefinedStruct,
 		// which hardcodes the base class.)
 		USeinPayloadStruct* UDS = NewObject<USeinPayloadStruct>(
@@ -380,7 +384,7 @@ UUserDefinedStruct* SyncPayloadStructForBlueprint(UBlueprint* Blueprint)
 
 	// NOTE on Blueprint renames: the asset-rename flow moves the Blueprint
 	// into a fresh package and leaves the embedded struct behind in the old
-	// one (alongside the redirector). Everything keeps working — the CDO link
+	// one (sometimes alongside a redirector). Everything keeps working — the CDO link
 	// and serialized baked entries resolve the struct where it lives, and
 	// redirector fix-up never deletes the package because it is not
 	// redirector-only — the struct's location is merely untidy. Never rename
@@ -402,10 +406,23 @@ UUserDefinedStruct* SyncPayloadStructForBlueprint(UBlueprint* Blueprint)
 	// movement export), plus the owner stamp that keeps a derived Blueprint's
 	// inherited PayloadStruct pointer from hijacking this asset.
 	USeinSimComponentFactory::MarkUserDefinedStructAsEntityComponent(UDS);
+	// UDS compilation restores metadata from EditorData. Keep ownership there
+	// as well as on the live struct so recompilation cannot erase provenance.
+	if (auto* EditorData = Cast<UUserDefinedStructEditorData>(UDS->EditorData))
+	{
+		if (EditorData->MetaData.FindRef(SeinSourceBlueprintKey) != Blueprint->GetPathName())
+		{
+			EditorData->Modify();
+			EditorData->MetaData.FindOrAdd(SeinSourceBlueprintKey) = Blueprint->GetPathName();
+			UDS->MarkPackageDirty();
+		}
+	}
 	if (!UDS->HasMetaData(SeinSourceBlueprintKey)
 		|| UDS->GetMetaData(SeinSourceBlueprintKey) != Blueprint->GetPathName())
 	{
+		UDS->Modify();
 		UDS->SetMetaData(SeinSourceBlueprintKey, *Blueprint->GetPathName());
+		UDS->MarkPackageDirty();
 	}
 	const bool bFieldsChanged = SyncFields(UDS, Desired);
 	if (bFieldsChanged)
@@ -417,6 +434,27 @@ UUserDefinedStruct* SyncPayloadStructForBlueprint(UBlueprint* Blueprint)
 		FStructureEditorUtils::OnStructureChanged(UDS, FStructureEditorUtils::Unknown);
 	}
 	StampPayloadStruct(Blueprint, UDS);
+	// Hidden payloads are not registry assets, but Struct Viewer indexes them
+	// by path. Notify existing pickers after sync without registering an asset.
+	if (GIsEditor && !IsRunningCommandlet())
+	{
+		FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"))
+			.Get().OnAssetAdded().Broadcast(FAssetData(UDS));
+		// UE's action database creates an empty entry before rejecting a
+		// non-asset. Remove that placeholder; its pre-delete path asserts that
+		// every entry it clears belongs to a supported asset.
+		if (!UDS->IsAsset())
+		{
+			if (FBlueprintActionDatabase* Database = FBlueprintActionDatabase::TryGet())
+			{
+				Database->ClearAssetActions(UDS);
+			}
+		}
+	}
+	if (FSeinARTSGraphNodesModule* GraphNodes = FModuleManager::GetModulePtr<FSeinARTSGraphNodesModule>(TEXT("SeinARTSGraphNodes")))
+	{
+		GraphNodes->RequestComponentActionsRefresh();
+	}
 
 	UE_LOG(LogSeinDataComponentSync, Log,
 		TEXT("%s -> %s (%d field(s)%s)."),

@@ -67,7 +67,7 @@ void ASeinLineTargeterPreview::OnPreviewUpdated_Implementation()
 	// No anchor yet (waiting for the first press/click) — nothing to stretch;
 	// hide the active segment. The base class already parked the actor at the
 	// cursor, which keeps any BP-added cursor marker live.
-	if (CurrentDragAnchorWorld.IsNearlyZero())
+	if (!bCaptureHasAnchor && CurrentDragAnchorWorld.IsNearlyZero())
 	{
 		SegmentDecal->SetVisibility(false);
 		return;

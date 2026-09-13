@@ -3,7 +3,7 @@
  * @file         SeinSteeringDebugDraw.cpp
  * @author       RJ Macklem
  * @created      05 Sep 2026
- * @latest       05 Sep 2026
+ * @latest       07 Sep 2026
  * @brief        Per-view steering requests, driver velocity, and settled motion diagnostics.
  * @disclaimer   This code was generated in whole or in part with the assistance of an AI language model.
  */
@@ -197,11 +197,15 @@ namespace UE::SeinARTSMovement::SteeringDebug
 					}
 				}
 			}
-			Text(8, FString::Printf(TEXT("Steering: %d / %d movers | selected first | through-terrain overlay"), Count, Total), FLinearColor::White);
-			Text(24, TEXT("White: desired heading   Cyan: after avoidance   Magenta: vehicle target"), Cyan);
+			Text(8, FString::Printf(TEXT("Steering: %d / %d movers | selected first | through-terrain overlay"), Count, Total), Amber);
+			Panel.TextRuns(24, { { TEXT("White: desired heading"), FLinearColor::White },
+				{ TEXT("   Cyan: after avoidance"), Cyan }, { TEXT("   Magenta: vehicle target"), Magenta } });
 			Text(40, TEXT("Red: avoidance request (100 cm/unit)   Heading arrows: 100 cm"), Red);
-			Text(56, TEXT("Velocity arrows: driver (amber) / settled (green), 1 second of motion"), Green);
-			Text(72, TEXT("Driver tint: requested slow/boost   Ring: footprint   Gray: sim offset"), Amber);
+			Panel.TextRuns(56, { { TEXT("Velocity arrows: "), FLinearColor::White },
+				{ TEXT("driver (amber)"), Amber }, { TEXT(" / "), FLinearColor::White },
+				{ TEXT("settled (green)"), Green }, { TEXT(", 1 second of motion"), FLinearColor::White } });
+			Panel.TextRuns(72, { { TEXT("Driver tint: requested slow/boost   Ring: footprint"), Amber },
+				{ TEXT("   Gray: sim offset"), Gray } });
 			Text(88, FString::Printf(TEXT("%d settled samples unavailable | n/a headings: idle / mode not sampled"), Missing), Gray);
 		}
 	}

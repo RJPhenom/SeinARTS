@@ -231,7 +231,7 @@ namespace
 						FText::Format(
 							LOCTEXT(
 								"RecipeBlueprintInheritanceCycle",
-								"Recipe Blueprint '{0}' participates in a recursive Blueprint inheritance chain. Repair the parent class before regenerating the manifest."),
+								"Recipe Blueprint '{0}' participates in a recursive Blueprint inheritance chain. Repair the parent class before cooking or validating strict saved evidence."),
 							FText::FromString(
 								Current->GetPathName())));
 					break;
@@ -295,7 +295,7 @@ namespace
 					FText::Format(
 						LOCTEXT(
 							"BlueprintNotCompiled",
-							"Recipe Blueprint '{0}' is uncompiled or has compile errors. Compile and save it before regenerating the manifest."),
+							"Recipe Blueprint '{0}' is uncompiled or has compile errors. Compile and save it before cooking or validating strict saved evidence."),
 						FText::FromString(
 							Blueprint.GetPathName())));
 				return;

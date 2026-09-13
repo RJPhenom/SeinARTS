@@ -3,6 +3,10 @@
 #include "Components/SeinExtentsPayload.h"
 #include "Components/SeinFogVisibilityPayload.h"
 #include "Components/SeinVisionPayload.h"
+#include "Components/SeinConstructionPayload.h"
+#include "Containers/Ticker.h"
+#include "HAL/IConsoleManager.h"
+#include "Lib/SeinConstructionBPFL.h"
 #include "Data/SeinWorldSnapshot.h"
 #include "Default/SeinFogOfWarDefault.h"
 #include "Lib/SeinFogOfWarBPFL.h"
@@ -607,6 +611,204 @@ namespace UE::SeinARTSTests
 			USeinARTSCoreSettings* Settings = nullptr;
 			FSoftClassPath SavedFogOfWarClass;
 		};
+	}
+
+	namespace ConstructionFogTestLocal
+	{
+		struct FFixture
+		{
+			FActorTestSpawner Spawner;
+			USeinWorldSubsystem* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+			USeinFogOfWarDefault* Fog = Cast<USeinFogOfWarDefault>(
+				Spawner.GetWorld().GetSubsystem<USeinFogOfWarSubsystem>()->GetFogOfWar());
+			TArray<FSeinEntityHandle> Sources;
+			FFixture() { if (Fog) FFogOfWarDefaultTestAccess::SeedCanonicalStaticGrid(*Fog); }
+			~FFixture() { if (World) World->StopSimulation(); }
+
+			bool Initialize(bool bQueued, int32 Count = 1)
+			{
+				if (!World || !Fog) return false;
+				return SeinTestMatchBootstrap::Materialize(*World, [&]()
+				{
+					World->RegisterPlayer(FSeinPlayerID(1), FSeinFactionID(1));
+					for (int32 Index = 0; Index < Count; ++Index)
+					{
+						const auto Entity = World->SpawnAbstractEntity(FFixedTransform(FFixedVector(
+							FFixedPoint::FromInt(50), FFixedPoint::FromInt(50), FFixedPoint::Zero)), FSeinPlayerID(1));
+						Sources.Add(Entity);
+						FSeinVisionPayload Vision;
+						FSeinVisionStamp Stamp;
+						Stamp.LayerMask = 0xfe; // Normal sight and every custom layer.
+						Vision.VisionStamps.Add(Stamp);
+						World->AddComponent(Entity, Vision);
+						FSeinConstructionPayload Construction;
+						Construction.bQueueConstructionOnSpawn = bQueued;
+						World->AddComponent(Entity, Construction);
+						// Same initializer used for level-placed and gameplay-spawned entities.
+						USeinConstructionBPFL::InitializeAtSpawn(*World, Entity);
+					}
+				}) && SeinTestMatchBootstrap::Start(*World);
+			}
+
+			FSeinConstructionHandle Job(int32 Index = 0) const
+			{
+				FSeinConstructionHandle Result;
+				Result.Entity = Sources[Index];
+				Result.JobID = World->GetComponent<FSeinConstructionPayload>(Result.Entity)->JobID;
+				return Result;
+			}
+
+			void TickVision()
+			{
+				const int32 Interval = FMath::Max(1, GetDefault<USeinARTSCoreSettings>()->VisionTickInterval);
+				for (int32 Tick = 0; Tick < Interval; ++Tick)
+					FTSTicker::GetCoreTicker().Tick(World->GetFixedDeltaTimeSeconds());
+			}
+
+			uint8 Bits() const { return FFogOfWarDefaultTestAccess::GetCellBits(*Fog, FSeinPlayerID(1)); }
+		};
+	}
+
+	TEST(UnfinishedSitesNeverRevealUntilExplicitCompletion, "SeinARTS.Sim.FogOfWar.Construction")
+	{
+		ConstructionFogTestLocal::FFixture F;
+		ASSERT_THAT(IsTrue(F.Initialize(true)));
+		F.TickVision();
+		ASSERT_THAT(AreEqual(uint8(0), F.Bits())); // No permanent exploration flash at placement.
+		{
+			auto Scope = FSeinSimContextTestAccess::Enter(*F.World);
+			USeinConstructionBPFL::SeinStartConstruction(F.World, F.Job());
+			USeinConstructionBPFL::SeinAdvanceConstruction(F.World, F.Job(), FFixedPoint::FromInt(10));
+		}
+		F.TickVision();
+		ASSERT_THAT(AreEqual(uint8(0), F.Bits())); // Work threshold alone does not complete the job.
+		{
+			auto Scope = FSeinSimContextTestAccess::Enter(*F.World);
+			USeinConstructionBPFL::SeinPauseConstruction(F.World, F.Job());
+		}
+		F.TickVision();
+		ASSERT_THAT(AreEqual(uint8(0), F.Bits()));
+		{
+			auto Scope = FSeinSimContextTestAccess::Enter(*F.World);
+			USeinConstructionBPFL::SeinStartConstruction(F.World, F.Job());
+		}
+		F.TickVision();
+		ASSERT_THAT(AreEqual(uint8(0), F.Bits()));
+		{
+			auto Scope = FSeinSimContextTestAccess::Enter(*F.World);
+			USeinConstructionBPFL::SeinCompleteConstruction(F.World, F.Job());
+		}
+		F.TickVision();
+		ASSERT_THAT(AreEqual(uint8(0xff), F.Bits()));
+	}
+
+	TEST(StartingConstructionRemovesCachedSightAndPreservesOverlapAndExploration, "SeinARTS.Sim.FogOfWar.Construction")
+	{
+		ConstructionFogTestLocal::FFixture F;
+		ASSERT_THAT(IsTrue(F.Initialize(false, 2)));
+		F.TickVision();
+		ASSERT_THAT(AreEqual(uint8(0xff), F.Bits()));
+		for (int32 Index = 0; Index < 2; ++Index)
+		{
+			{
+				auto Scope = FSeinSimContextTestAccess::Enter(*F.World);
+				FSeinConstructionHandle Job;
+				USeinConstructionBPFL::SeinQueueConstruction(F.World, F.Sources[Index], Job);
+			}
+			F.TickVision();
+			ASSERT_THAT(AreEqual(uint8(Index == 0 ? 0xff : SEIN_FOW_BIT_EXPLORED), F.Bits()));
+		}
+		ASSERT_THAT(IsNotNull(F.World->GetComponent<FSeinVisionPayload>(F.Sources[0])));
+		{
+			auto Scope = FSeinSimContextTestAccess::Enter(*F.World);
+			USeinConstructionBPFL::SeinCompleteConstruction(F.World, F.Job());
+		}
+		F.TickVision();
+		ASSERT_THAT(AreEqual(uint8(0xff), F.Bits())); // Same stationary pose must stamp again.
+	}
+
+	TEST(ConstructionVisionMatchesAcrossSerialAndParallelWorlds, "SeinARTS.Determinism.FogOfWar.Construction")
+	{
+		auto* Parallel = IConsoleManager::Get().FindConsoleVariable(TEXT("Sein.Sim.Parallel"));
+		ASSERT_THAT(IsNotNull(Parallel));
+		struct FRestore { IConsoleVariable* Variable; int32 Value; ~FRestore() { Variable->Set(Value, ECVF_SetByCode); } } Restore{Parallel, Parallel->GetInt()};
+		auto* MinBatch = IConsoleManager::Get().FindConsoleVariable(TEXT("Sein.Sim.ParallelMinBatch"));
+		ASSERT_THAT(IsNotNull(MinBatch));
+		FRestore RestoreBatch{MinBatch, MinBatch->GetInt()};
+		MinBatch->Set(1, ECVF_SetByCode);
+		TArray<FGuid> Reference;
+		for (int32 Mode = 0; Mode < 2; ++Mode)
+		{
+			Parallel->Set(Mode, ECVF_SetByCode);
+			ConstructionFogTestLocal::FFixture F;
+			ASSERT_THAT(IsTrue(F.Initialize(true, 128)));
+			for (int32 Phase = 0; Phase < 3; ++Phase)
+			{
+				if (Phase > 0)
+				{
+					auto Scope = FSeinSimContextTestAccess::Enter(*F.World);
+					for (int32 Index = 0; Index < F.Sources.Num(); ++Index)
+					{
+						if (Phase == 1) USeinConstructionBPFL::SeinCompleteConstruction(F.World, F.Job(Index));
+						else
+						{
+							FSeinConstructionHandle Job;
+							USeinConstructionBPFL::SeinQueueConstruction(F.World, F.Sources[Index], Job);
+						}
+					}
+				}
+				const int32 Interval = FMath::Max(1, GetDefault<USeinARTSCoreSettings>()->VisionTickInterval);
+				for (int32 Tick = 0; Tick < Interval; ++Tick)
+				{
+					FTSTicker::GetCoreTicker().Tick(F.World->GetFixedDeltaTimeSeconds());
+					FGuid Root; FString Error;
+					ASSERT_THAT(IsTrue(F.World->ComputeCanonicalStateRoot(Root, Error)));
+					if (Mode == 0) Reference.Add(Root);
+					else ASSERT_THAT(IsTrue(Reference[Phase * Interval + Tick] == Root));
+				}
+			}
+		}
+	}
+
+	TEST(PendingConstructionVisionRemovalRestoresAndContinuesWithEqualRoots, "SeinARTS.Determinism.FogOfWar.Construction")
+	{
+		ConstructionFogTestLocal::FFixture F;
+		ASSERT_THAT(IsTrue(F.Initialize(false)));
+		F.TickVision();
+		ASSERT_THAT(AreEqual(uint8(0xff), F.Bits()));
+		{
+			auto Scope = FSeinSimContextTestAccess::Enter(*F.World);
+			FSeinConstructionHandle Job;
+			USeinConstructionBPFL::SeinQueueConstruction(F.World, F.Sources[0], Job);
+		}
+		// Snapshot between the lifecycle change and the next fog update, while
+		// the old sight footprint is still cached. Restore must remove it too.
+		FSeinWorldSnapshot Snapshot;
+		F.World->CaptureSnapshot(Snapshot);
+		ASSERT_THAT(AreEqual(FSeinWorldSnapshot::CurrentVersion, Snapshot.SnapshotVersion));
+		ConstructionFogTestLocal::FFixture Restored;
+		ASSERT_THAT(IsTrue(SeinTestSnapshotRestore::RestoreTrusted(*Restored.World, Snapshot)));
+		ASSERT_THAT(AreEqual(F.Bits(), Restored.Bits()));
+		for (int32 Phase = 0; Phase < 3; ++Phase)
+		{
+			for (auto* World : {F.World, Restored.World})
+			{
+				auto Scope = FSeinSimContextTestAccess::Enter(*World);
+				if (Phase == 0) USeinConstructionBPFL::SeinStartConstruction(World, F.Job());
+				if (Phase == 1) USeinConstructionBPFL::SeinPauseConstruction(World, F.Job());
+				if (Phase == 2) USeinConstructionBPFL::SeinCompleteConstruction(World, F.Job());
+			}
+			const int32 Interval = FMath::Max(1, GetDefault<USeinARTSCoreSettings>()->VisionTickInterval);
+			for (int32 Tick = 0; Tick < Interval; ++Tick)
+			{
+				FTSTicker::GetCoreTicker().Tick(F.World->GetFixedDeltaTimeSeconds());
+				FGuid A, B; FString Error;
+				ASSERT_THAT(IsTrue(F.World->ComputeCanonicalStateRoot(A, Error)));
+				ASSERT_THAT(IsTrue(Restored.World->ComputeCanonicalStateRoot(B, Error)));
+				ASSERT_THAT(IsTrue(A == B));
+			}
+			ASSERT_THAT(AreEqual(uint8(Phase == 2 ? 0xff : SEIN_FOW_BIT_EXPLORED), Restored.Bits()));
+		}
 	}
 
 	TEST(VisionStampIdentityIsExact, "SeinARTS.Unit.FogOfWar")

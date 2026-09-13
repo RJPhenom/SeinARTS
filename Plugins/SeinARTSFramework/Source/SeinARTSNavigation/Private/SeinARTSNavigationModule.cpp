@@ -319,6 +319,7 @@ void FSeinARTSNavigationModule::StartupModule()
 	SimulationContentRegistrationHandle.Reset();
 
 	FSeinSimulationContentContributorDescriptor ContentDescriptor;
+	ContentDescriptor.OwnerModule = TEXT("SeinARTSNavigation");
 	ContentDescriptor.StableContributorId = TEXT("seinarts.navigation");
 	ContentDescriptor.ContributorRevision = 1;
 	ContentDescriptor.DiscoveryRoots = {

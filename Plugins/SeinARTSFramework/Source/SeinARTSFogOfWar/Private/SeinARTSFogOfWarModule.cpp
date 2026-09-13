@@ -148,7 +148,7 @@ namespace
 		if (Bit >= 2) Layer = Settings->VisionLayers.IsValidIndex(Bit - 2)
 			? Settings->VisionLayers[Bit - 2].LayerName.ToString() : TEXT("Unconfigured");
 		Panel.Text(8, FString::Printf(TEXT("Fog of War: player %u (%s) | layer %d: %s"), Observer.Value,
-			bOverride ? TEXT("override") : TEXT("world local observer"), Bit, *Layer), FLinearColor::White);
+			bOverride ? TEXT("override") : TEXT("world local observer"), Bit, *Layer), FLinearColor(0, 0.8f, 1));
 		const auto* Sub = World->GetSubsystem<USeinFogOfWarSubsystem>();
 		const USeinFogOfWar* Fog = Sub ? Sub->GetFogOfWar() : nullptr;
 		const bool bRuntime = Fog && Fog->HasRuntimeData();
@@ -157,7 +157,8 @@ namespace
 		Panel.Text(40, Bit == 0 ? TEXT("Layer color: explored cells (default implementation)")
 			: TEXT("Layer color: cells visible on the chosen layer (default implementation)"), FLinearColor(GetDebugLayerColor(Bit)));
 		Panel.Text(56, TEXT("Red: dynamic blockers, or static blockers without visibility"), FLinearColor(1, 0.15f, 0.15f));
-		Panel.Text(72, TEXT("Black: remaining cells without the chosen layer bit; red wins for dynamic blockers"), FLinearColor(0.75f, 0.75f, 0.75f));
+		Panel.TextRuns(72, { { TEXT("Black"), FLinearColor::Black },
+			{ TEXT(": remaining cells without the chosen layer bit; red wins for dynamic blockers"), FLinearColor::White } });
 		Panel.Text(88, TEXT("No grid / empty collector: red fallback is coverage, not a visibility result"), FLinearColor(1, 0.65f, 0));
 		Panel.Text(104, TEXT("Perspective: Sein.FogOfWar.Show.Player <id> / Sein.FogOfWar.Show.Layer <0..7>"), FLinearColor::White);
 	}
@@ -346,8 +347,9 @@ void FSeinARTSFogOfWarModule::StartupModule()
 	}
 
 	FSeinSimulationContentContributorDescriptor ContentDescriptor;
+	ContentDescriptor.OwnerModule = TEXT("SeinARTSFogOfWar");
 	ContentDescriptor.StableContributorId = TEXT("seinarts.fogofwar");
-	ContentDescriptor.ContributorRevision = 1;
+	ContentDescriptor.ContributorRevision = 2;
 	ContentDescriptor.DiscoveryRoots = {
 		MakePackageDiscoveryRoot(USeinFogOfWar::StaticClass()),
 	};

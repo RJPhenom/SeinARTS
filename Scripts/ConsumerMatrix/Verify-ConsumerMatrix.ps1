@@ -8,8 +8,8 @@
   selected production-plugin source from this checkout or exact packaged ZIPs
   supplied through -ArtifactDirectory. It builds the Editor and Shipping game
   targets, plus Client and Server when the engine distribution supports them.
-  It then creates a consumer-owned map, generates the consumer-owned
-  simulation-content manifest, loads the exact maps, cooks/packages them,
+  It then creates consumer-owned maps, loads them, and cooks/packages them
+  with automatically generated build-owned compatibility data,
   smoke-loads the packaged game, and drives a real packaged
   listen-server/client/replay qualification for Framework and Movement+.
 
@@ -78,7 +78,7 @@ $EditorCmd = Join-Path $EngineRoot 'Engine\Binaries\Win64\UnrealEditor-Cmd.exe'
 $RunUat = Join-Path $EngineRoot 'Engine\Build\BatchFiles\RunUAT.bat'
 $GeneratedRoot = Join-Path $RepoRoot 'Saved\ConsumerMatrix'
 $PluginSourceRoot = Join-Path $RepoRoot 'Plugins'
-$ConsumerGenerationSchemaVersion = 7
+$ConsumerGenerationSchemaVersion = 9
 $ArtifactHashes = @{}
 $ArtifactVersion = $null
 $QualificationRunId = if ($QualificationRunId) {
@@ -408,56 +408,6 @@ function Initialize-ArtifactPluginSource([string] $Directory)
 		-ForegroundColor Green
 }
 
-function Invoke-ManifestBootstrap(
-	[string] $ProfileName,
-	[string] $Uproject,
-	[string] $ScriptPath,
-	[string] $ManifestPath,
-	[string] $ProjectRoot)
-{
-	Write-Host `
-		"[ConsumerMatrix] $ProfileName bootstrap manifest generation" `
-		-ForegroundColor Cyan
-	$BootstrapOutput = @(& $EditorCmd @(
-		$Uproject,
-		'-run=pythonscript',
-		"-script=$ScriptPath",
-		'-unattended', '-nop4', '-nosplash', '-nullrhi', '-stdout') 2>&1)
-	$BootstrapExitCode = $LASTEXITCODE
-	$BootstrapLines = @($BootstrapOutput | ForEach-Object { "$_" })
-	$BootstrapLines | ForEach-Object { Write-Host $_ }
-	$BootstrapLog = Join-Path `
-		$ProjectRoot 'Saved\BootstrapManifest.log'
-	Write-Utf8NoBom $BootstrapLog ($BootstrapLines -join "`r`n")
-
-	if (-not (Test-Path -LiteralPath $ManifestPath)) {
-		throw "$ProfileName bootstrap manifest generation produced no '$ManifestPath'."
-	}
-	if (-not ($BootstrapLines -match 'Generated simulation-content manifest')) {
-		throw "$ProfileName bootstrap produced an asset but no generation-success record. See '$BootstrapLog'."
-	}
-	if ($BootstrapExitCode -eq 0) {
-		return
-	}
-
-	# The bootstrap world necessarily starts before the newly generated profile
-	# exists. It may therefore see either no configured manifest or a stale
-	# contributor-set profile. Permit only those exact protocol errors; the next
-	# editor invocation must start clean from the generated asset.
-	$UnexpectedErrors = @($BootstrapLines | Where-Object {
-		$_ -match 'Error:' -and
-		$_ -notmatch 'Configured Simulation Content Manifest .* could not be loaded' -and
-		$_ -notmatch 'Simulation-content container has no exact profile for the active contributor set' -and
-		$_ -notmatch 'pool-object codec manifest could not freeze'
-	})
-	if ($BootstrapExitCode -ne 1 -or $UnexpectedErrors.Count -gt 0) {
-		throw "$ProfileName bootstrap manifest process failed unexpectedly (exit $BootstrapExitCode). See '$BootstrapLog'."
-	}
-	Write-Host `
-		"[ConsumerMatrix] $ProfileName accepted the one-time stale-manifest bootstrap diagnostics." `
-		-ForegroundColor DarkYellow
-}
-
 function Copy-CleanPlugin([string] $PluginName, [string] $ProjectRoot)
 {
 	$Source = Join-Path $PluginSourceRoot $PluginName
@@ -554,13 +504,10 @@ function Refresh-ConsumerPlugins(
 	}
 }
 
-function Assert-NoHostGameDependency([string] $ProjectRoot)
+function Assert-NoHostGameDependency([string] $ProjectRoot, [switch] $AuditAssets)
 {
-	# Byte-level scan for host example-content paths across every consumer
-	# file, binary assets included — a self-contained equivalent of the
-	# previous binary ripgrep check, so the gate needs no
-	# external tool. Latin1 maps bytes 1:1 onto chars, making the ordinal
-	# Contains() a raw byte search identical to ripgrep's binary mode.
+	# Text paths fail immediately. Package strings need an Unreal audit because
+	# level origin URLs and retained editor inheritance history are not dependencies.
 	$Needle = '/Game/SeinARTSExamples'
 	$ExcludedSegments = @('\Binaries\', '\Intermediate\', '\Saved\')
 	$Forbidden = @(Get-ChildItem -LiteralPath $ProjectRoot -Recurse -File |
@@ -569,12 +516,29 @@ function Assert-NoHostGameDependency([string] $ProjectRoot)
 			-not ($ExcludedSegments | Where-Object { $Relative.Contains($_) })
 		} |
 		Where-Object {
-			[System.IO.File]::ReadAllText(
-				$_.FullName, [System.Text.Encoding]::Latin1).Contains($Needle)
+			$Bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+			[System.Text.Encoding]::Latin1.GetString($Bytes).Contains($Needle) -or
+				[System.Text.Encoding]::Unicode.GetString($Bytes).Contains($Needle) -or
+				($Bytes.Length -gt 1 -and [System.Text.Encoding]::Unicode.GetString($Bytes, 1, $Bytes.Length - 1).Contains($Needle))
 		} |
 		ForEach-Object { $_.FullName })
-	if ($Forbidden) {
-		throw "Generated consumer contains forbidden host example-content references:`n$($Forbidden -join "`n")"
+	$Assets = @($Forbidden | Where-Object { [System.IO.Path]::GetExtension($_) -in @('.uasset', '.umap') })
+	$Text = @($Forbidden | Where-Object { $_ -notin $Assets })
+	if ($Text) {
+		throw "Generated consumer contains forbidden host example-content references:`n$($Text -join "`n")"
+	}
+	if ($AuditAssets -and $Assets.Count -gt 0) {
+		$InputFile = Join-Path $ProjectRoot 'Saved\ConsumerDependencyAudit\candidates.txt'
+		Write-Utf8NoBom $InputFile ($Assets -join "`n")
+		$Before = @($Assets | ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash })
+		Invoke-Checked 'Consumer asset dependency audit' $EditorCmd @(
+			(Join-Path $ProjectRoot 'SeinConsumer.uproject'),
+			'-run=SeinARTSEditor.SeinConsumerDependencyAudit', "-Input=$InputFile",
+			'-unattended', '-nop4', '-nosplash', '-nullrhi', '-stdout')
+		$After = @($Assets | ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash })
+		if (@(Compare-Object $Before $After).Count -ne 0) {
+			throw 'Consumer dependency audit modified its source packages.'
+		}
 	}
 }
 
@@ -726,6 +690,7 @@ function New-ConsumerProject([string] $ProfileName)
 	$ModuleDependencies = @(
 		'Core',
 		'CoreUObject',
+		'CoreOnline',
 		'Engine',
 		'SeinARTSCore',
 		'SeinARTSFramework',
@@ -752,8 +717,8 @@ function New-ConsumerProject([string] $ProfileName)
 		$Plugins += 'SeinARTSCoverExtension'
 		$ModuleDependencies += 'SeinARTSCover'
 		$Definitions += 'SEIN_CONSUMER_WITH_COVER=1'
-		$ExtraIncludes += '#include "Components/SeinCoverComponent.h"'
-		$HeaderProof += '(void)FSeinCoverComponent::StaticStruct();'
+		$ExtraIncludes += '#include "Components/SeinCoverPayload.h"'
+		$HeaderProof += '(void)FSeinCoverPayload::StaticStruct();'
 	}
 	if ($ProfileName -in @('Squad', 'Full')) {
 		$Plugins += 'SeinARTSSquadExtension'
@@ -916,6 +881,7 @@ public:
 
 		FSeinSimulationContentContributorDescriptor Descriptor;
 		Descriptor.StableContributorId = TEXT("seinconsumer.qualification");
+		Descriptor.OwnerModule = TEXT("SeinConsumer");
 		Descriptor.ContributorRevision = 1;
 		Descriptor.DiscoveryRoots.Add(MoveTemp(Root));
 		FString Error;
@@ -1010,7 +976,7 @@ bAutoLoginAtStartup=True
 ProjectID=E42D638747C4108CCF59B1A7AB1A57D4
 
 [/Script/SeinARTSCoreEntity.SeinARTSCoreSettings]
-SimulationContentManifest=/Game/SeinARTS/SeinSimulationContentManifest.SeinSimulationContentManifest
+SimulationContentManifest=None
 DefaultBrokerResolverClass=/Script/SeinARTSCoreEntity.SeinDefaultCommandBrokerResolver
 NavigationClass=__SEIN_CONSUMER_NAVIGATION_CLASS__
 LevelDataClass=/Script/SeinARTSLevelData.SeinLevelDataDefault
@@ -1098,21 +1064,6 @@ if not unreal.EditorAssetLibrary.save_asset(match_path, only_if_is_dirty=False):
 	$CreateMapPy = $CreateMapPy.Replace(
 		'__SEIN_MOVEMENT_FIXTURE_CLASS__', $MovementFixtureClassExpression)
 	Write-Utf8NoBom (Join-Path $ProjectRoot 'CreateConsumerMap.py') $CreateMapPy
-
-	$GenerateManifestPy = @'
-import unreal
-
-manifest_path = "/Game/SeinARTS/SeinSimulationContentManifest"
-unreal.SystemLibrary.execute_console_command(
-    None, "Sein.SimulationContent.GenerateManifest"
-)
-if not unreal.EditorAssetLibrary.does_asset_exist(manifest_path):
-    raise RuntimeError("Manifest generation produced no " + manifest_path)
-unreal.log("Verified generated manifest " + manifest_path)
-'@
-	Write-Utf8NoBom `
-		(Join-Path $ProjectRoot 'GenerateSimulationContentManifest.py') `
-		$GenerateManifestPy
 
 	$ExpectedMovementFixtureClassPath = if ($ProfileName -eq 'MovementPlus') {
 		'/Script/SeinConsumer.SeinConsumerMovementUnit'
@@ -1256,22 +1207,6 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 		Invoke-Checked "$ProfileName Server build" $BuildBat (@('SeinConsumerServer') + $CommonBuildArgs)
 	}
 
-	# Bootstrap the configured manifest before constructing a UWorld. The
-	# framework intentionally validates manifest ownership at world startup;
-	# a generated consumer must satisfy that contract before its first map is
-	# created, then regenerate after the map exists so authored world content is
-	# part of the final profile.
-	$ManifestScript = Join-Path `
-		$Project.Root 'GenerateSimulationContentManifest.py'
-	$ManifestPath = Join-Path `
-		$Project.Root 'Content\SeinARTS\SeinSimulationContentManifest.uasset'
-	Invoke-ManifestBootstrap `
-		$ProfileName `
-		$Project.Uproject `
-		$ManifestScript `
-		$ManifestPath `
-		$Project.Root
-
 	$MapPath = Join-Path $Project.Root 'Content\Maps\ConsumerMap.umap'
 	$LobbyMapPath = Join-Path `
 		$Project.Root 'Content\Maps\ConsumerLobbyMap.umap'
@@ -1290,16 +1225,6 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 	}
 	Enable-ConsumerRuntimeMapConfiguration $Project.Root
 
-	# Regenerate after the map exists. A builder failure is logged as Error and
-	# makes the Python commandlet fail even though the bootstrap asset exists.
-	Invoke-Checked "$ProfileName manifest generation" $EditorCmd @(
-		$Project.Uproject,
-		'-run=pythonscript',
-		"-script=$ManifestScript",
-		'-unattended', '-nop4', '-nosplash', '-nullrhi', '-stdout')
-	if (-not (Test-Path -LiteralPath $ManifestPath)) {
-		throw "$ProfileName manifest generation produced no '$ManifestPath'."
-	}
 	$InstallationDiagnostic = if ($ArtifactDirectory) {
 		Join-Path $Project.Root `
 			'Plugins\SeinARTSFramework\Tools\Diagnostics\Test-SeinARTSInstallation.ps1'
@@ -1324,8 +1249,6 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 	}
 	$DiagnosticReport = ($DiagnosticJson -join "`r`n") | ConvertFrom-Json
 	$ExpectedDiagnosticMode = if ($ArtifactDirectory) { 'Release' } else { 'Source' }
-	$ExpectedManifestObject =
-		'/Game/SeinARTS/SeinSimulationContentManifest.SeinSimulationContentManifest'
 	$DiagnosticPlugins = @($DiagnosticReport.enabledProductionPlugins | Sort-Object)
 	if ([int]$DiagnosticReport.schemaVersion -ne 1 -or
 		[string]$DiagnosticReport.result -cne 'Passed' -or
@@ -1340,7 +1263,7 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 		($ArtifactDirectory -and
 			[string]$DiagnosticReport.cohortVersion -cne $ArtifactVersion) -or
 		-not $DiagnosticReport.cohortVersion -or
-		[string]$DiagnosticReport.simulationContentManifest -cne $ExpectedManifestObject -or
+		[string]$DiagnosticReport.simulationContentMode -cne 'AutomaticCook' -or
 		$DiagnosticPlugins.Count -ne $Project.Plugins.Count -or
 		(@(Compare-Object $DiagnosticPlugins @($Project.Plugins | Sort-Object))).Count -ne 0) {
 		throw "$ProfileName installation diagnostic returned an invalid pass receipt."
@@ -1350,7 +1273,7 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 	Write-Utf8NoBom $InstallationDiagnosticReceipt `
 		($DiagnosticReport | ConvertTo-Json -Depth 8)
 
-	Assert-NoHostGameDependency $Project.Root
+	Assert-NoHostGameDependency $Project.Root -AuditAssets
 	Invoke-Checked "$ProfileName uncooked map load" $EditorCmd @(
 		$Project.Uproject,
 		'-run=pythonscript',
@@ -1374,6 +1297,13 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 			"-archivedirectory=$ArchiveRoot",
 			'-map=/Game/Maps/ConsumerLobbyMap+/Game/Maps/ConsumerMap',
 			'-skipbuild')
+
+		$CompatibilityFile = Join-Path $Project.Root `
+			'Saved\Cooked\Windows\SeinConsumer\Content\SeinARTS\SimulationCompatibility.bin'
+		if (-not (Test-Path -LiteralPath $CompatibilityFile -PathType Leaf) -or
+			(Get-Item -LiteralPath $CompatibilityFile).Length -eq 0) {
+			throw "$ProfileName cook produced no compatibility data."
+		}
 
 		$GameExe = Get-ChildItem -LiteralPath $ArchiveRoot -Recurse -File |
 			Where-Object {
@@ -1535,7 +1465,7 @@ function Invoke-ConsumerProfile([string] $ProfileName)
 		consumerMaps = @(
 			'/Game/Maps/ConsumerLobbyMap',
 			'/Game/Maps/ConsumerMap')
-		consumerManifest = '/Game/SeinARTS/SeinSimulationContentManifest'
+		compatibilityMode = 'AutomaticCook'
 		installationDiagnostic = 'Passed'
 		installationDiagnosticReceipt = $InstallationDiagnosticReceipt
 		installationDiagnosticReceiptSha256 =

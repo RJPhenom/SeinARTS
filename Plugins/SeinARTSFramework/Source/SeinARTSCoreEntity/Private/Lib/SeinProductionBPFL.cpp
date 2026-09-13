@@ -1,7 +1,7 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinProductionBPFL.cpp
- * @brief   Read-only production BPFL impl. Producer-side mutation
+ * @brief   Production queries and deterministic runtime policy overrides. Queue mutation
  *          (enqueue, rally, etc.) lives on USeinAbility — see
  *          SeinAbility.cpp for the EnqueueProduction / SetRallyPoint
  *          / SetRallyEntity / ClearRallyPoint impls.
@@ -20,6 +20,46 @@ USeinWorldSubsystem* USeinProductionBPFL::GetWorldSubsystem(const UObject* World
 	if (!WorldContextObject) return nullptr;
 	UWorld* World = WorldContextObject->GetWorld();
 	return World ? World->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+}
+
+bool USeinProductionBPFL::SeinCanEnqueueProduction(const UObject* WorldContextObject,
+	FSeinEntityHandle Producer, TSubclassOf<ASeinActor> ProducibleClass,
+	ESeinProductionQueueResult& Result, FSeinProductionQueueSettings& Settings, int64& Used)
+{
+	Settings = FSeinProductionQueueSettings();
+	Used = 0;
+	const auto* World = GetWorldSubsystem(WorldContextObject);
+	Result = World ? World->CheckProductionQueue(Producer, ProducibleClass, Settings, Used)
+		: ESeinProductionQueueResult::InvalidProducer;
+	return Result == ESeinProductionQueueResult::Available;
+}
+
+bool USeinProductionBPFL::SeinSetProductionUnitQueuePolicy(const UObject* WorldContextObject,
+	FSeinEntityHandle Producer, TSubclassOf<ASeinActor> ProducibleClass, FSeinProductionQueueSettings Settings)
+{
+	auto* World = GetWorldSubsystem(WorldContextObject);
+	return World && World->SetProducerQueueSettings(Producer, ProducibleClass, &Settings);
+}
+
+bool USeinProductionBPFL::SeinClearProductionUnitQueuePolicy(const UObject* WorldContextObject,
+	FSeinEntityHandle Producer, TSubclassOf<ASeinActor> ProducibleClass)
+{
+	auto* World = GetWorldSubsystem(WorldContextObject);
+	return World && World->SetProducerQueueSettings(Producer, ProducibleClass, nullptr);
+}
+
+bool USeinProductionBPFL::SeinSetPlayerQueuePolicy(const UObject* WorldContextObject,
+	FSeinPlayerID Player, TSubclassOf<ASeinActor> ProducibleClass, FSeinProductionQueueSettings Settings)
+{
+	auto* World = GetWorldSubsystem(WorldContextObject);
+	return World && World->SetPlayerQueueSettings(Player, ProducibleClass, &Settings);
+}
+
+bool USeinProductionBPFL::SeinClearPlayerQueuePolicy(const UObject* WorldContextObject,
+	FSeinPlayerID Player, TSubclassOf<ASeinActor> ProducibleClass)
+{
+	auto* World = GetWorldSubsystem(WorldContextObject);
+	return World && World->SetPlayerQueueSettings(Player, ProducibleClass, nullptr);
 }
 
 bool USeinProductionBPFL::SeinGetProductionData(const UObject* WorldContextObject,

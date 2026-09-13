@@ -1,31 +1,23 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  *
- * @file:    SeinMovementComponent.h
- * @brief:   Per-entity movement authoring + runtime state. Replaces the
- *           legacy `FSeinMovementData` (which co-mingled movement, navigation,
- *           and per-class tuning); the split is:
- *             - FSeinMovementPayload (this file) — top-line speed/turn
- *               knobs, movement-class picker, polymorphic per-class data,
- *               reverse settings, runtime velocity + arrival state.
- *             - FSeinNavigationPayload (SeinARTSNavigation module) —
- *               pathfinding + nav-layer + repath authoring.
- *             - FSeinInfantryMovementData / FSeinWheeledMovementData /
- *               FSeinTrackedMovementData / FSeinHoverMovementData /
- *               FSeinFlyingMovementData — per-movement-class tuning,
- *               surfaced in `MovementClassData` via the polymorphic-UDS
- *               auto-swap (custom details panel keys off the selected
- *               MovementClass's GetMovementDataStruct() virtual).
+ * @file         SeinMovementPayload.h
+ * @author       RJ Macklem
+ * @created      2026
+ * @latest       7 Sep 2026
+ * @brief        Per-entity movement configuration and runtime state.
  *
- *           Designer authoring lives on the entity bridge's ComponentData
- *           array — designer picks `FSeinMovementPayload` as an entry and
- *           the component details panel surfaces the fields below + the
- *           per-class sub-data UDS that auto-populates from MovementClass.
+ *               Sein Movement authors the default automatic movement ability,
+ *               speed, turning, movement class, and class-specific tuning.
+ *               The entity bridge injects this payload into simulation storage.
+ *               Navigation configuration lives in FSeinNavigationPayload.
+ *
+ * @disclaimer   Generated with assistance from an AI language model.
  */
-
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Abilities/SeinAbility.h"
 #include "Components/SeinPayload.h"
 #include "StructUtils/InstancedStruct.h"
 #include "Types/FixedPoint.h"
@@ -83,6 +75,18 @@ USTRUCT(BlueprintType, meta = (SeinDeterministic))
 struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 {
 	GENERATED_BODY()
+
+	/** Ability used to move this unit toward a production rally point or into
+	 *  range before another ability executes. Leave empty to disable automatic
+	 *  movement; directly ordered abilities remain available.
+	 *
+	 *  Choose an already-granted, non-passive Point ability with a valid unique
+	 *  Ability Tag. This field does not grant the ability or select a fallback
+	 *  if it becomes unavailable. Changing it affects new automatic orders;
+	 *  queued orders retain the ability tag they captured. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
+		meta = (DisplayName = "Movement Ability", DisplayAfter = "TurnRate"))
+	TSubclassOf<USeinAbility> DefaultMoveAbility;
 
 	// =========================================================================
 	// Top-line authoring fields (apply to every movement class)
@@ -338,6 +342,7 @@ struct SEINARTSCOREENTITY_API FSeinMovementPayload : public FSeinPayload
 FORCEINLINE uint32 GetTypeHash(const FSeinMovementPayload& C)
 {
 	uint32 Hash = GetTypeHash(C.TopSpeed);
+	Hash = HashCombine(Hash, GetTypeHash(C.DefaultMoveAbility));
 	Hash = HashCombine(Hash, GetTypeHash(C.TurnRate));
 	Hash = HashCombine(Hash, GetTypeHash(C.MovementClass));
 	Hash = HashCombine(Hash, GetTypeHash(C.bCanReverse));

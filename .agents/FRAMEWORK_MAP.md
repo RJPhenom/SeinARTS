@@ -65,7 +65,121 @@ until broker or cancellation-tag arbitration ends the current one. Passives rema
 Snapshot admission requires both directions of the invariant: active objects are indexed in the
 correct role, and indexed objects are active. The base ability pool provider behavior revision is 2.
 
+Successful activation queues `AbilityActivated` before `OnActivate`; deactivation queues
+`AbilityEnded` after activity detachment and before cleanup callbacks. Natural completion and
+cancellation share this end notification. Rejected activation and repeated end calls emit none.
+The actor bridge drains the FIFO on the render side and calls the existing `On Ability Activated`
+and `On Ability Ended` Blueprint events. These describe the ability lifetime, not individual work
+pulses or pauses; animations that need that precision consume designer-owned work state or cues.
+This presentation repair adds no canonical state or snapshot schema fields.
+Five focused regressions cover ordered completion/cancellation, immediate completion, callback
+replacement, rejected activation, and deferred bridge delivery to Blueprint event entrypoints.
+Independent review found no production defect; the test fixture's SpawnActor reference handling
+was corrected. Validation has not executed these tests: the test translation unit compiled, but
+concurrent targeter-preview compile/link failures blocked the test-enabled and ordinary editor
+builds (`Saved/Validation/51e3305fe41e4439802329c9b4c3faec/validation-result.json`).
+Rerun `Validate.ps1 -Preset Focused -Profile Framework -Suite SeinARTS.Unit.Abilities` when that
+checkout build is healthy, then verify demo build/harvest montage start/stop in PIE.
+
+### Ability activation inputs
+
+Ability variables opt in through **Expose on Activate** (`SeinExposeOnActivate` Blueprint
+metadata). Native subclasses declare reflected, mutable fields and call
+`ExposeActivationInput(GET_MEMBER_NAME_CHECKED(UMyAbility, QueueIndex))` in their constructor.
+Blueprint metadata is baked into the ability CDO at compilation/save for cooked execution;
+native constructor declarations remain available without editor metadata.
+
+**Activate Ability** takes the invoking local Sein Player Controller, an explicit entity, and an
+ability class picker that expands exposed variables into typed pins. It submits player input
+using the controller's player identity, never the recipient's owner. **Issue Ability** is the
+simulation-only equivalent. **Make Ability Inputs** builds a reusable packet for dynamic-tag
+submission, and **Issue Broker Order With Inputs** preserves it through broker fan-out.
+Existing tag-based APIs remain available and initialize exposed fields from class defaults.
+Caller pins refresh after declaration compilation, preserve variable GUIDs across renames, and
+follow changed defaults unless the caller entered a literal override.
+The player node was renamed from Submit Ability to Activate Ability without changing serialized
+node/function identities. The old Activate Ability (Direct) Blueprint wrapper still bypasses
+command admission and remains pending caller migration; the queue-item widget still references it.
+Rename verification was blocked before tests by active Live Coding and unrelated entity/widget
+include-order errors (`Saved/Validation/f85a1525b8234d16bab07e7799544326/validation-result.json`).
+The prior feature verification below predates this display-name change.
+
+`FSeinAbilityActivationInputs` captures only exposed values with an exact class/property schema
+fingerprint and bounded canonical bytes (64 fields, 4096 value bytes, 256 aggregate container
+entries). No class is loaded from incoming data. Concrete deterministic structs and ordered
+arrays are supported; float/reference/unordered/opaque types, transient fields, dynamic
+Instanced Struct values, native fixed C arrays/bitfield input declarations, and native
+EditDefaultsOnly input fields are rejected. Connected native bitfield sources are normalized
+when supplying an ordinary boolean input. Native callers
+use `SeinMakeAbilityInputs<UMyAbility>(Configure, OutInputs, Error)` or capture an ability template.
+
+Command admission decodes against the granted ability's trusted class before side effects.
+**Can Activate With Inputs** can inspect the proposal with **Get Activation Input** without
+replacing the running instance's variables. Ownership is revalidated after each callback.
+Committed activation assigns every exposed variable before On Activate, including defaults for
+an empty request. Ordinary state is preserved, queued requests own their values, and direct
+native activation retains its documented low-level gate bypass. Command wire v4, broker schema
+v5, and pool root-class contract v2 reject incompatible older protocols; the exposure schema
+participates in native and Blueprint pool admission. Production queue entry identity is unchanged.
+
+Regression suites contain `ActivationInputs` in their names and exercise native capture,
+compiled Blueprint execution, pin reconstruction, transport, broker dispatch, fixed ticks,
+serial/parallel roots and fresh-world snapshot continuation. Receipt status remains the source
+of truth for completed verification; visual authoring and multiplayer PIE are separate gates.
+
+Verification (2026-09-11): Development and Shipping built successfully. The six runtime feature
+checks passed in `Saved/Automation/activation-inputs-final.json`; the final six Blueprint checks
+(including distinct menu actions, compiled setter/getter execution, stale-bytecode abort,
+bitfield conversion, rename/default refresh and declaration errors) passed in
+`Saved/Validation/5e78ec59749d4d21b622a0bc1226c137/validation-result.json`.
+Framework simulation passed 95 tests (`Saved/Automation/activation-inputs-sim.json`), integration
+passed 22 with rendering enabled (`Saved/Automation/activation-inputs-integration-rendering.json`),
+and determinism passed 45 (`Saved/Automation/activation-inputs-determinism.json`). Fresh-process
+serial/parallel roots and raw poses matched all 120 frames (`Saved/Automation/activation-inputs-ab/ab-result.json`).
+Shipping receipt: `Saved/Build/4ee03e7b691245dba372dedc87136370/build-result.json`.
+The broad Simulation preset remains failed at its Unit step: 434 passed, five replay-version/navigation
+assertions failed (`Saved/Validation/60ed40bf635a487f836f8f5ee6537354/validation-result.json`).
+Those assertions are outside the changed activation implementation and were not relaxed.
+Independent adversarial review findings were resolved. The user stopped Computer Use with Escape;
+actual variable Details presentation, widget cancellation PIE, and packaged Blueprint execution remain
+manual gates. Public documentation impact is recorded in PUBLIC_DOCS_BACKLOG.md.
+
 ### Designer authoring boundaries
+
+Component Get/Set graph actions are refreshed by `FSeinARTSGraphNodesModule` on a
+deferred editor tick after payload synchronization. Saved component Blueprints and legacy
+standalone UDS are discovered through the Asset Registry before rebuilding the node-class
+actions; embedded payload structs intentionally are not registry assets. Discovery loads
+these asset classes, including UDS that must be inspected for component eligibility. It
+does not run in cook/other commandlets. `SeinARTS.Editor.ComponentActions` covers creation
+after menu initialization, recompilation without duplicate actions, and rediscovery after
+both the Blueprint and embedded payload were unloaded. Development evidence:
+`Saved/Automation/component-actions-verified-result.json` (2 passed, no test warnings/errors).
+The preset wrapper stopped on pre-existing EOF whitespace in `Config/Tags/SeinGameplayTags.ini`;
+the focused runner and owned-file whitespace check passed. The rendered ability search-menu check
+remains a human/editor gate. Documentation impact: private-agent; public workflow unchanged.
+
+Component deletion also owns generated payload deletion. `SeinComponentDeletion` adds
+proven-owned payloads to Unreal's `OnAddExtraObjectsToDelete` set, so force deletion runs
+the engine's UDS reinstancing/reference replacement for Apply Field Delta's `StructType`
+pin and other references. Owner stamps or embedded companion/redirector identity establish
+ownership; inherited payloads and ambiguous unstamped standalone structs are excluded.
+Get/Set templates are released before deletion, and successful hidden-payload deletion
+publishes the path removal that Struct Viewer cannot receive from `IsAsset()==false`.
+Cancellation snapshots are scoped to each pre-delete notification. Blueprint rename events
+update ownership in both live and compiler metadata and dirty the payload's original package;
+this works even when Asset Tools omits a redirector. Sync repairs legacy compiler metadata
+and notifies existing Struct Viewers without registering hidden payloads as assets.
+Development evidence (2026-09-09): `Saved/Automation/component-deletion-complete-result.json`
+passed all 5 ComponentActions tests after test-enabled and ordinary editor builds. Coverage
+includes actual Apply Field Delta reference replacement, a cached Struct Viewer, moved owner
+and payload save/unload/reload, inherited/shared payload protection, metadata-only persistence
+repair, registry invisibility, canceled deletion, and unrelated deletion after cancel/reload.
+One Asset Registry warning concerns the temporary moved fixture's old package being observed
+on disk after a deletion notification; no test errors. Independent adversarial source review
+found no remaining destructive blocker. Owned-file whitespace checks passed. The rendered
+designer workflow remains a human/editor gate; pre-existing orphaned project assets were not
+deleted by this fix. Documentation impact remains private-agent.
 
 Ordinary gameplay activates an Ability through **Issue Ability Command**, which enters the
 lockstep queue and re-runs command authority, targeting, pathability, cooldown, tag, capacity,
@@ -90,21 +204,86 @@ designer-component picker fail closed. After a successful Push, save the source 
 the Simulation Content Manifest. Start at `SeinBalanceProfile.h`, `SeinBalanceTableExport.cpp`, and
 `SeinBalanceProfileDetails.cpp`.
 
-Auto-tag derivation persists missing tags into the dedicated generated Gameplay Tags source and
-enforces project-wide uniqueness across Ability, Effect, and entity identity tags. Auto-owned asset
-renames report an actionable notification when a collision or unmapped prefix leaves the old tag in
-place; **Reset to Auto** reports updated, already-current, or exact failure state. Bulk regeneration
-uses one suspended write pass, resumes the tag tree once, then applies newly available tags in the
-same command rather than requiring a second click. Start at `SeinAutoTagGenerator.h`,
-`SeinAutoTagGenerator.cpp`, and `SeinAutoTagDetails.cpp`.
+RJ changed the generated identity rename policy on 2026-09-11: Content Browser asset-name
+changes must automatically migrate the generated identity and its entire subtree, remove the old
+picker definitions, and preserve serialized references through hidden redirects. Folder-only moves
+and manually owned identities keep their tags. Prefix settings propose names without dictionary
+writes; factories and fresh copies assign unique identities. Entity identity is authored through
+its Identity component and rebaked into the bridge, with inherited overrides isolated from parents.
+
+Automatic migration repairs loaded references before native rename saves the owner and defers
+Blueprint compilation until the rename stack returns. Dirty content is supported. Undo of unrelated
+edits retains its history and canonicalizes restored tag values afterward. Rename-back reclaims the
+previous alias without creating a redirect cycle. Initialize Tag can reconcile a remembered generated
+identity after its field is reset. Guarded recovery can consolidate an already-initialized generated
+destination; conflicting map keys/set entries reject recovery before any dictionary write.
+
+The full hierarchy, including implicit intermediate nodes, is preflighted and written together.
+Mixed-source descendants, shared identity owners, cross-source aliases, and foreign destinations
+block migration. Explicit Rename Tag remains available; explicit migration and cleanup require
+saved content and clear Undo after confirmation. Automatic rename does not clear Undo.
+
+**Inspect and Clean Up Generated Tags** explains ownership and retention reasons. Cleanup rechecks
+saved asset references, loaded identity owners, all source redirects, source/config strings, implicit
+ancestors, generated provenance, and exclusive editable source ownership before removing each leaf.
+Unknown/manual/native/shared/restricted entries are retained. Quote the commandlet argument in
+PowerShell: `'-run=SeinARTSEditor.SeinTagAuditCommandlet'`. It writes an ignored `Saved/TagAudit` receipt; `-Cleanup` additionally reconciles eligible entries. Exact entity-tag lookup
+and hierarchical Has Tag remain distinct; runtime grant ownership behavior has not changed.
+Start at `SeinAutoTagGenerator.cpp`, `SeinTagMigration.cpp`, `SeinTagAudit.cpp`, and
+`SeinIdentityTagValidator.cpp`.
+
+2026-09-11 implementation remains uncommitted. The editor build and all **19** focused
+`SeinARTS.Editor.AutoTag` tests pass. Current receipt:
+`Saved/Validation/78c10b27258e42b7b84405c694d26944/validation-result.json`.
+Coverage includes native AssetTools rename, full hierarchy and implicit nodes, dirty references,
+unrelated Undo, rename-back, real consumer Blueprint graph save/reload, reset/reinitialize,
+unloaded saved DataTable map-key conflicts, source drift, rollback and protected cleanup.
+Independent review identified and informed the unloaded-reference and persistence checks.
+
+`SA_Produce_Cancel` was repaired: the old `SeinARTS.Ability.Cancel.Production` definition is gone,
+`SeinARTS.Ability.Produce.Cancel` remains, and the old name is a hidden redirect. A fresh editor
+commandlet loaded the saved Blueprint and verified identity, old subtree absence and redirect
+resolution with zero errors/warnings: `Saved/TagAudit/final-cancel-verification-20260911.log`.
+The corresponding audit is `Saved/TagAudit/927A96C0455839CBAE487B8F4EF2A04E.txt`.
+The fixture-generated Consumer entry was removed through guarded single-tag cleanup. Tests also
+compare the production tag source before/after: `Saved/TagAudit/test-production-source-check.json`.
+The current audit has no duplicate identity owners; the earlier Factory/Truck duplicates are no
+longer present in its owner records.
+
+Deferred compilation can leave dependent Blueprint packages dirty; normal Save All persists those
+compiled changes. Hidden redirects preserve older serialized references. Automated save/reload and
+Undo checks pass; interactive Details presentation and runtime graph execution remain human gates.
+
+Production queue policies are authored on the producible's `FSeinProduciblePayload`:
+Multi-Queueable (default), Once per Production Unit / Player, and Fixed Amount per
+Production Unit / Player. Fixed policies expose Queue Amount >= 1. Limits count pending
+queue entries plus successful lifetime completions of the exact queued actor class.
+Cancellation releases pending allowance; spawned-unit death does not undo a completed purchase.
+History is recorded even under Multi and retained separately from the production component.
+Player history survives producer destruction; producer history uses the full generational handle.
+
+`SeinWorldProductionPolicy.cpp` owns admission and mutable overrides. Producer overrides take
+precedence over player overrides, then authored class defaults. Lowering a limit or switching
+policy preserves accepted entries and history; it blocks new enqueueing where usage exceeds the
+effective allowance. Set/Clear Production Unit Queue Policy and Set/Clear Player Queue Policy
+are authorized simulation mutations. Can Enqueue Production is the read-only eligibility query
+for ability Can Activate or UI; arbitrary ability graphs do not declare their queued class in
+advance, so button availability needs that query wired explicitly. Enqueue Production always
+enforces admission and refunds its captured funding on rejection, even without the UI preflight.
+
+User decision (2026-09-12): ownership transfer cancels all pending production with ordinary
+per-entry refunds to captured payers. Cancellation walks backwards to preserve front progress.
+Successful completions remain charged to the completing player; per-producer history stays with
+the producer on capture. Completion reserves history before callback-capable spawn/effect work
+and rolls it back on failure, keeping reentrant enqueue checks accurate. Both histories and
+overrides are canonical, snapshot-restored state. Snapshot and envelope semantics are v19;
+Core simulation-content contributor and built-in command implementation revisions are 6.
+Verification and remaining acceptance gates are recorded in PUBLIC_DOCS_BACKLOG.md.
 
 Economy is ability composition over generic deterministic data, not a hardcoded worker subsystem.
 Resource-node stock and worker cargo belong in components accessed through typed get/set nodes;
 dropoff uses **Grant Income** inside an authorized simulation callback. The whole income map
-validates atomically and valid uncapped overflow saturates. Construction workers call **Add
-Construction Progress** on `FSeinConstructionComponent`; only positive non-overflowing progress
-mutates. Completion removes the component and releases only the framework-owned
-`State.UnderConstruction` grant, preserving an identical designer-authored base grant.
+validates atomically and valid uncapped overflow saturates. Construction uses persistent `FSeinConstructionPayload` settings and explicit job handles. Start Queued for Construction defaults off; Queue, Start, Pause and Complete Construction own lifecycle transitions. Work fields live in the existing FSeinConstructionPayload and Sein Construction authoring component. Add Construction Work and work queries use those fields; the threshold does not change lifecycle or gate completion. There is no separate work component. Explicit entity presentation groups replace automatic mesh hiding, and generic entity binding supplies widget and managed-actor context. Completion preserves the component, applies the captured effect once and releases only the framework-owned `State.UnderConstruction` grant. Stage tags and render delegates support designer presentation; see [.agents/CONSTRUCTION_LIFECYCLE.md](CONSTRUCTION_LIFECYCLE.md).
 
 Combat is designer-owned (re-cut 2026-08-23 from the prescriptive 2026-08-16 substrate). The
 framework ships no vitals, weapon, damage, or projectile schema and no combat tick systems; a
@@ -155,7 +334,7 @@ initial path requests, reservation settlement, replay, and reconnect. The shippe
 `USeinFormationPreviewSubsystem` -> `ASeinPlayerController` path carries the exact displayed artifact
 into the command. Public Blueprint input code can use `Plan Formation Order` -> `Issue Formation
 Order`: planning returns an opaque transient one-use token that freezes the complete preview key,
-authenticated player, exact displayed artifact, and BrokerOrder V4 recipient boundaries. Issue
+authenticated player, exact displayed artifact, and BrokerOrder V5 recipient boundaries. Issue
 revalidates world/session, principal, authority, and each surviving recipient segment; moving or
 destroyed destination providers do not retarget the frozen points. The older `Compute Formation
 Preview` and `Issue Broker Order` nodes remain compatibility surfaces and still recompute defaults
@@ -172,9 +351,56 @@ Movement+ is not a full arbitrary Reeds-Shepp/Dubins route solver. Its wheeled a
 - Resync transfers an authenticated bounded checkpoint envelope plus the exact retained command tail, catches up through the normal gate, and reactivates on an agreed root.
 - Replay v9 is an append-only digest-chained journal with periodic checkpoints, opaque turn batches, durable frontiers, bounded indexes, lazy decode, crash-tail recovery, and atomic publication. Frozen v8 reading remains supported.
 
+### Placement admission
+
+Target capture supplies geometry; the ability's Placement definition supplies the authoritative
+footprint actor class. Empty Placement retains the legacy Point + Facing Building Class fallback.
+The definition applies to any capture gesture and is immutable ability configuration. Visual
+component source/mesh overrides never change admission. Both sources remain serialized during
+the compatibility migration; a nonempty Placement definition takes precedence.
+
+Abilities with Requires Free Footprint use SeinPlacementValidation for preview, confirm,
+broker admission, and final activation (including deferred approach follow-ups). The Point +
+Facing spec's Building Class supplies every authored extents shape. Baked navigation is
+queried through the existing resolver; live simulation extents with Blocks Nav and a nonzero
+layer mask also reject planar overlap, including queued construction sites. Entities without
+extents use their navigation fallback radius. Current state is queried instead of the PreTick
+overlay so same-tick spawns, removals, and edits are visible immediately. Captured yaw and local
+shape offsets are shared between preview and admission. Missing required placement data fails
+closed; ungated abilities are unchanged. Core content and built-in command revisions are 8.
+Validation evidence is recorded in PUBLIC_DOCS_BACKLOG.md.
+
+### Targeter presentation
+
+ASeinTargeterPreview is a Blueprintable general presentation actor. The subsystem supplies
+FSeinTargeterPreviewContext with source identity, input phase, explicit anchor presence,
+command-rounded target pose, validity/reason, captured points, dimensions, and an optional actor
+visual source. Preview Initialized runs after deferred spawning and optional visual helpers
+initialize; Validity Changed runs initially and on result/reason changes; Preview Updated retains
+its existing override; Point Captured sees the updated capture array; Preview Ended distinguishes
+Submitted, Cancelled, Replaced, and Unavailable. Submitted is not gameplay success. Module unload
+suppresses Blueprint teardown callbacks. Context and visual helper state are render-only.
+
+Optional USeinTargeterMeshComponent and USeinTargeterDecalComponent own visual sources, sizing,
+and explicit Valid/Warning/Blocked material choices. Missing warning/blocked material falls back
+to Valid. Materials are swapped on validity changes without a parameter-name contract. Mesh
+cloning preserves actor-local attachment transforms and source component material overrides.
+Existing point/facing preview classes remain compatibility presets with the same named inherited
+mesh/decal components and legacy fields; the old TintColor path applies only when no explicit
+materials are configured. New custom previews inherit the general base and add only the helpers
+they need. Construction-site visuals remain owned by entity presentation.
+
 ### Fog of war
 
 FoW source stamps are deterministic grid shapes with radial, rectangle, or cone range semantics.
+The default grid suppresses every vision layer from entities with unfinished construction
+(Queued, Building, Paused, or legacy ReadyToComplete). Complete entities retain authored vision;
+merely carrying a construction payload does not suppress it. Filtering precedes the source cache,
+so entering construction removes prior footprints on the next scheduled fog update, preserving
+other sources and sticky exploration. Completion resumes normal stamping at the same cadence.
+Both placed and spawned entities use this lifecycle rule. Fog behavior revision 3, stamp-system
+revision 2, and content-contributor revision 2 identify this change; validation is recorded in
+PUBLIC_DOCS_BACKLOG.md.
 Terrain vision multipliers scale only the active shape range (`Radius`, `HalfExtents`, or
 `ConeLength`), keeping cache identity and behavior free of irrelevant-field churn. Extents-authored
 blockers fold their local Z offset into the snapshotted world-space base before computing the top.
@@ -183,7 +409,7 @@ The dynamic blocker hot path keeps one dense maximum-top grid plus the layer mas
 overlapping layers have different tops carry a sparse eight-entry exact-height exception. Opacity
 queries therefore use the true maximum for the requested layer subset without multiplying the dense
 grid footprint by every layer. The sparse exceptions participate in capture, restore, reset, and
-canonical comparison; behavior revision 2 / codec revision 5 deliberately rejects older semantic
+canonical comparison; behavior revision 3 / codec revision 5 deliberately rejects older semantic
 descriptors even though the serialized payload schema itself did not grow.
 
 ### Presentation performance policy
@@ -215,6 +441,18 @@ qualification and PIE matrix.
 - Entity identity includes generation.
 - Runtime state that affects a future tick must participate in hash/capture/restore/reset/replay/reconnect.
 - Lockstep settings and implementation choices participate in frozen compatibility fingerprints.
+
+## Seamless controller identity
+
+UE 5.8 replaces controllers during seamless travel without broadcasting PostLogin.
+`ASeinGameMode::SwapPlayerControllers` transfers the old controller's retained lobby seat and
+optional external admission record before Unreal destroys the old local controller. The destination
+lobby actor is rebuilt from the frozen roster and stamped from the replacement PlayerState;
+the completed handoff refreshes its connection address. Neither copied `SeinPlayerID` nor a free
+seat grants handoff authority. Missing bindings, conflicting owners, foreign worlds, and non-Human
+frozen slots reject the replacement before gameplay binding. A stale old-controller logout cannot
+release the transferred seat. Subsequent physical reconnect still requires the matching transport
+identity or the configured external authorizer.
 
 ## Downstream verification
 

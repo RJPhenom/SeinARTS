@@ -14,6 +14,7 @@
 #include "GameplayTagContainer.h"
 #include "Data/SeinResourceTypes.h"
 #include "Effects/SeinActiveEffect.h"
+#include "Components/SeinProductionPolicy.h"
 #include "SeinPlayerState.generated.h"
 
 /**
@@ -99,6 +100,10 @@ struct SEINARTSCOREENTITY_API FSeinPlayerState
 	 *  player-attribute resolver path. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Effects")
 	TArray<FSeinActiveEffect> PlayerEffects;
+
+	/** Lifetime production completions and runtime policy overrides for this player. */
+	UPROPERTY()
+	FSeinProductionPolicyState ProductionPolicyState;
 
 	FSeinPlayerState() = default;
 	explicit FSeinPlayerState(FSeinPlayerID InPlayerID, FSeinFactionID InFactionID, uint8 InTeamID = 0);

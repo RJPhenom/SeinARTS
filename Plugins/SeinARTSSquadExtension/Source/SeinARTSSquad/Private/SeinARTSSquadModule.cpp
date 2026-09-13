@@ -113,6 +113,7 @@ void FSeinARTSSquadModule::StartupModule()
 	}
 
 	FSeinSimulationContentContributorDescriptor ContentDescriptor;
+	ContentDescriptor.OwnerModule = TEXT("SeinARTSSquad");
 	ContentDescriptor.StableContributorId = TEXT("seinarts.squad");
 	ContentDescriptor.ContributorRevision = 4;
 

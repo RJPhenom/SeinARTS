@@ -375,9 +375,8 @@ struct SEINARTSCOREENTITY_API FSeinWorldSnapshot
 {
 	GENERATED_BODY()
 
-	// v18: editor-driven ComponentData class overlays and per-entity override
-	// evidence became canonical future-affecting state.
-	static constexpr int32 CurrentVersion = 18;
+	// v19: production completion histories and runtime queue policies are canonical state.
+	static constexpr int32 CurrentVersion = 19;
 	/** Defensive reconstruction bound for an imported checkpoint. The runtime
 	 *  pool remains independently extensible; snapshots above this generous
 	 *  simultaneous-entity ceiling fail before allocating slot-indexed state. */

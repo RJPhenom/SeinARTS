@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  *
  * @file:    SeinEntityBridgeComponent.cpp
@@ -2050,6 +2050,7 @@ void USeinEntityBridgeComponent::SetEntityHandle(FSeinEntityHandle InHandle)
 			}
 		}
 	}
+	RefreshPresentation();
 }
 
 bool USeinEntityBridgeComponent::HasValidEntity() const
@@ -2195,8 +2196,19 @@ void USeinEntityBridgeComponent::OnSimFrame(int32 TicksProcessed)
 		CurrentSimTransform.Rotation.Z.ToFloat(), CurrentSimTransform.Rotation.W.ToFloat());
 }
 
+void USeinEntityBridgeComponent::RefreshPresentation()
+{
+	TOptional<USeinWorldSubsystem::FReadOnlyObserverScope> ObserverScope;
+	if (auto* World = GetWorld())
+		if (auto* Sim = World->GetSubsystem<USeinWorldSubsystem>()) ObserverScope.Emplace(*Sim);
+	OnPresentationRefresh.Broadcast();
+}
+
 void USeinEntityBridgeComponent::HandleVisualEvent(const FSeinVisualEvent& Event)
 {
+	TOptional<USeinWorldSubsystem::FReadOnlyObserverScope> ObserverScope;
+	if (auto* World = GetWorld())
+		if (auto* Sim = World->GetSubsystem<USeinWorldSubsystem>()) ObserverScope.Emplace(*Sim);
 	// Broadcast to subscribed render-side ACs FIRST so they observe the same
 	// event ordering the ASeinActor's BP events see. Listeners that need to
 	// respond before the actor's BP graph runs (e.g. construction visual swap)

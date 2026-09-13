@@ -4,6 +4,7 @@
 #include "Actor/SeinEntityBridgeComponent.h"
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"
 #include "Components/SeinAbilityPayload.h"
+#include "Components/SeinMovementPayload.h"
 #include "Components/SeinActiveEffectsPayload.h"
 #include "Components/SeinProduciblePayload.h"
 #include "Components/SeinProductionPayload.h"
@@ -19,6 +20,18 @@
 #include "TestTypes/SeinDeferredDestroyTestTypes.h"
 #include "TestTypes/SeinProductionCostTestTypes.h"
 #include "TestTypes/SeinEffectMutationTestTypes.h"
+
+USeinDefaultMoveTestFirstAbility::USeinDefaultMoveTestFirstAbility()
+{
+	AbilityTag = SeinARTSTags::Command_Context_RightClick;
+	TargetType = ESeinAbilityTargetType::Point;
+}
+
+USeinDefaultMoveTestSelectedAbility::USeinDefaultMoveTestSelectedAbility()
+{
+	AbilityTag = SeinARTSTags::Command_Context_Target_Ground;
+	TargetType = ESeinAbilityTargetType::Point;
+}
 
 namespace
 {
@@ -110,7 +123,7 @@ namespace
 	void ExpectAbilityHashDiagnostic(TTestRunner& TestRunner)
 	{
 		TestRunner.AddExpectedError(
-			TEXT("Component 'SeinAbilityComponent' has field(s) excluded from the legacy local state fingerprint"),
+			TEXT("Component 'SeinAbilityPayload' has field(s) excluded from the legacy local state fingerprint"),
 			EAutomationExpectedErrorFlags::Contains, 1, false);
 	}
 
@@ -262,12 +275,16 @@ namespace UE::SeinARTSTests
 		FSeinEntityHandle Entity;
 		USeinAbility* MoveAbility = nullptr;
 		USeinAbility* PaidAbility = nullptr;
+		USeinAbility* AlternateMove = nullptr;
 		const auto AuthorState = [&]()
 		{
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 
 			Entity = World->SpawnAbstractEntity(FFixedTransform(), Player);
 			World->AddComponent(Entity, FSeinAbilityPayload());
+			AlternateMove = GrantAbility(*World, Entity,
+				USeinDefaultMoveTestFirstAbility::StaticClass(),
+				SeinARTSTags::Command_Context_RightClick);
 			MoveAbility = GrantAbility(*World, Entity,
 				USeinProductionCostTestMoveAbility::StaticClass(),
 				SeinARTSTags::Command_Context_Target_Ground);
@@ -276,7 +293,10 @@ namespace UE::SeinARTSTests
 				SeinARTSTags::Command_Context_AbilityTriggered);
 			if (MoveAbility && PaidAbility)
 			{
-				MoveAbility->bIsMoveAbility = true;
+				MoveAbility->TargetType = ESeinAbilityTargetType::Point;
+				FSeinMovementPayload Movement;
+				Movement.DefaultMoveAbility = MoveAbility->GetClass();
+				World->AddComponent(Entity, Movement);
 				PaidAbility->MaxRange = FFixedPoint::FromInt(1);
 				PaidAbility->OutOfRangeBehavior =
 					ESeinOutOfRangeBehavior::AutoMoveThen;
@@ -338,6 +358,24 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsTrue(PaidAbility->DeductedCost.IsEmpty()));
 		ASSERT_THAT(IsTrue(PaidAbility->PendingCompletionCost.IsEmpty()));
 
+		// The prefix already captured its movement tag. Changing the default
+		// affects future resolution without rewriting this queued order.
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			World->GetComponentMutable<FSeinMovementPayload>(Entity)->DefaultMoveAbility = AlternateMove->GetClass();
+		}
+		ASSERT_THAT(IsTrue(World->ResolveDefaultMoveAbility(Entity) == AlternateMove));
+		ASSERT_THAT(IsTrue(USeinAbilityBPFL::SeinGetAbilityAvailability(
+			World, Entity, PaidAbility->AbilityTag,
+			FSeinEntityHandle::Invalid(), FarTarget).bAvailable));
+		{
+			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			World->GetComponentMutable<FSeinMovementPayload>(Entity)->DefaultMoveAbility = nullptr;
+		}
+		ASSERT_THAT(IsFalse(USeinAbilityBPFL::SeinGetAbilityAvailability(
+			World, Entity, PaidAbility->AbilityTag,
+			FSeinEntityHandle::Invalid(), FarTarget).bAvailable));
+
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
 			FSeinEntity* SimEntity =
@@ -347,6 +385,7 @@ namespace UE::SeinARTSTests
 		}
 		TickOnce(*World); // Consume the derived Move command.
 		ASSERT_THAT(IsTrue(MoveAbility->bIsActive));
+		ASSERT_THAT(IsFalse(AlternateMove->bIsActive));
 
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
@@ -366,6 +405,50 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(
 			FFixedPoint::FromInt(StartingBalance - AbilityCost).Value,
 			ResourceValue(*World, Player)));
+	}
+
+	TEST(ProductionRallyUsesSelectedGrantRatherThanFirstGrant,
+		"SeinARTS.Sim.Abilities.DefaultMove")
+	{
+		FScopedDefaultBrokerResolver BrokerResolver;
+		FScopedProducibleClass Producible(FFixedPoint::Zero);
+		const auto* First = GetDefault<USeinDefaultMoveTestFirstAbility>();
+		const auto* Selected = GetDefault<USeinDefaultMoveTestSelectedAbility>();
+		FSeinAbilityPayload Grants;
+		Grants.GrantedAbilities = {First->GetClass(), Selected->GetClass()};
+		FSeinMovementPayload Movement;
+		Movement.DefaultMoveAbility = Selected->GetClass();
+		Producible.Bridge->ComponentData.Add(FInstancedStruct::Make(Grants));
+		Producible.Bridge->ComponentData.Add(FInstancedStruct::Make(Movement));
+		FActorTestSpawner Spawner;
+		auto* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(*World, [&]
+		{
+			const FSeinPlayerID Player(1);
+			World->RegisterPlayer(Player, FSeinFactionID(1));
+			const auto Producer = World->SpawnAbstractEntity(FFixedTransform(), Player);
+			FSeinProductionPayload Production;
+			Production.Queue.Add(MakeReadyUnitEntry(Player));
+			Production.RallyTransform.SetLocation(FFixedVector(
+				FFixedPoint::FromInt(100), FFixedPoint::Zero, FFixedPoint::Zero));
+			World->AddComponent(Producer, Production);
+		})));
+		TickOnce(*World);
+		TickOnce(*World);
+		FSeinEntityHandle Produced;
+		World->GetEntityPool().ForEachEntity([&](FSeinEntityHandle Handle, const FSeinEntity&)
+		{
+			if (World->GetEntityActorClass(Handle) == ASeinProductionCostTestActor::StaticClass()) Produced = Handle;
+		});
+		ASSERT_THAT(IsTrue(Produced.IsValid()));
+		const auto* Abilities = World->GetComponent<FSeinAbilityPayload>(Produced);
+		ASSERT_THAT(IsNotNull(Abilities));
+		const auto* SelectedInstance = Abilities->FindAbilityByTag(*World, Selected->AbilityTag);
+		const auto* FirstInstance = Abilities->FindAbilityByTag(*World, First->AbilityTag);
+		ASSERT_THAT(IsNotNull(SelectedInstance));
+		ASSERT_THAT(IsNotNull(FirstInstance));
+		ASSERT_THAT(IsTrue(SelectedInstance->bIsActive));
+		ASSERT_THAT(IsFalse(FirstInstance->bIsActive));
 	}
 
 	TEST(SuccessfulEnqueueTransfersFundingOwnershipAndCancellationRefundsOnce,
@@ -456,9 +539,7 @@ namespace UE::SeinARTSTests
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
 			World->SetEntityOwner(Producer, NewOwner);
 		}
-		FSeinCommand Cancel = FSeinCommand::MakeCancelProductionCommand(
-			NewOwner, Producer, 0);
-		SubmitAuthorizedDraft(*World, Cancel);
+		// Ownership transfer now cancels pending production with normal refunds.
 		TickOnce(*World);
 		Production = World->GetComponent<FSeinProductionPayload>(Producer);
 		ASSERT_THAT(IsNotNull(Production));
@@ -469,6 +550,88 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(
 			FFixedPoint::FromInt(StartingBalance).Value,
 			ResourceValue(*World, NewOwner)));
+	}
+
+	TEST(AbilityCancelsSelectedProductionWithCapturedRefundPolicy,
+		"SeinARTS.Sim.Abilities.ProductionCost")
+	{
+		TestRunner->AddExpectedError(
+			TEXT("CancelProduction rejected outside this world's simulation context"),
+			EAutomationExpectedErrorFlags::Contains, 1, false);
+		FScopedResourceCatalog Catalog(ESeinProductionDeductionTiming::AtEnqueue);
+		FActorTestSpawner Spawner;
+		USeinWorldSubsystem* World =
+			Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		const FSeinPlayerID Payer(1);
+		const FSeinPlayerID Owner(2);
+		FSeinEntityHandle Producer;
+		USeinAbility* Ability = NewObject<USeinProductionCostTestAbility>(World);
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Materialize(*World, [&]()
+		{
+			World->RegisterPlayer(Payer, FSeinFactionID(1));
+			World->RegisterPlayer(Owner, FSeinFactionID(1));
+			Producer = World->SpawnAbstractEntity(FFixedTransform(), Owner);
+			FSeinProductionQueueEntry Entry = MakeReadyUnitEntry(Payer, 70);
+			Entry.TotalBuildTime = FFixedPoint::FromInt(10);
+			Entry.AtEnqueueCost.Amounts.Add(
+				SeinARTSTags::Resource, FFixedPoint::FromInt(20));
+			FSeinProductionPayload Production;
+			Production.Queue = {Entry, Entry, Entry};
+			Production.Queue[2].RefundPolicy.bUseCustomRefund = true;
+			Production.Queue[2].RefundPolicy.CustomRefundPercentage =
+				FFixedPoint::One / FFixedPoint::FromInt(4);
+			Production.CurrentBuildProgress = FFixedPoint::FromInt(5);
+			Production.bStalledAtCompletion = true;
+			World->AddComponent(Producer, Production);
+			Ability->InitializeAbility(Producer, World);
+		})));
+		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+
+		ASSERT_THAT(IsFalse(Ability->CancelProduction()));
+		const auto* Production = World->GetComponent<FSeinProductionPayload>(Producer);
+		ASSERT_THAT(IsNotNull(Production));
+		ASSERT_THAT(AreEqual(3, Production->Queue.Num()));
+		ASSERT_THAT(AreEqual(FFixedPoint::FromInt(StartingBalance).Value,
+			ResourceValue(*World, Payer)));
+
+		auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+		ASSERT_THAT(IsFalse(Ability->CancelProduction(-1)));
+		ASSERT_THAT(IsFalse(Ability->CancelProduction(3)));
+		ASSERT_THAT(AreEqual(3, Production->Queue.Num()));
+		ASSERT_THAT(IsTrue(Ability->CancelProduction(2)));
+		ASSERT_THAT(AreEqual(2, Production->Queue.Num()));
+		ASSERT_THAT(AreEqual(FFixedPoint::FromInt(StartingBalance + 5).Value,
+			ResourceValue(*World, Payer)));
+		ASSERT_THAT(AreEqual(FFixedPoint::FromInt(5).Value,
+			Production->CurrentBuildProgress.Value));
+		ASSERT_THAT(IsTrue(Production->bStalledAtCompletion));
+
+		ASSERT_THAT(IsTrue(Ability->CancelProduction(1)));
+		ASSERT_THAT(AreEqual(1, Production->Queue.Num()));
+		ASSERT_THAT(AreEqual(FFixedPoint::FromInt(StartingBalance + 25).Value,
+			ResourceValue(*World, Payer)));
+		ASSERT_THAT(AreEqual(FFixedPoint::FromInt(5).Value,
+			Production->CurrentBuildProgress.Value));
+		ASSERT_THAT(IsTrue(Production->bStalledAtCompletion));
+
+		ASSERT_THAT(IsTrue(Ability->CancelProduction()));
+		ASSERT_THAT(AreEqual(0, Production->Queue.Num()));
+		ASSERT_THAT(AreEqual(FFixedPoint::Zero.Value,
+			Production->CurrentBuildProgress.Value));
+		ASSERT_THAT(IsFalse(Production->bStalledAtCompletion));
+		ASSERT_THAT(AreEqual(FFixedPoint::FromInt(StartingBalance + 35).Value,
+			ResourceValue(*World, Payer)));
+		ASSERT_THAT(IsFalse(Ability->CancelProduction()));
+		ASSERT_THAT(AreEqual(FFixedPoint::FromInt(StartingBalance + 35).Value,
+			ResourceValue(*World, Payer)));
+		ASSERT_THAT(AreEqual(FFixedPoint::FromInt(StartingBalance).Value,
+			ResourceValue(*World, Owner)));
+
+		World->RemoveComponent<FSeinProductionPayload>(Producer);
+		ASSERT_THAT(IsFalse(Ability->CancelProduction()));
+		Ability->InitializeAbility(Producer, nullptr);
+		ASSERT_THAT(IsFalse(Ability->CancelProduction()));
 	}
 
 	TEST(ImmediateProductionIgnoresCatalogDeferralAndQueuesNoCompletionCost,
@@ -645,9 +808,11 @@ namespace UE::SeinARTSTests
 
 		{
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
+			// Transfer before enqueue: the activation's captured payer remains Player,
+			// while production belongs to NewOwner. Pending queues would be cancelled.
+			World->SetEntityOwner(Producer, NewOwner);
 			Ability->EnqueueProduction(ASeinProductionCostTestActor::StaticClass());
 			Ability->CancelAbility();
-			World->SetEntityOwner(Producer, NewOwner);
 			FSeinPlayerState* State =
 				World->GetPlayerStateMutable(Player);
 			ASSERT_THAT(IsNotNull(State));

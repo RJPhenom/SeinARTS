@@ -69,6 +69,23 @@ export default defineConfig({
 							label: 'Create the First Level',
 							slug: 'guides/creating-the-first-level',
 						},
+						{
+							label: 'Create the Soldier',
+							slug: 'guides/creating-the-soldier',
+						},
+						{
+							label: 'Add Movement',
+							slug: 'guides/adding-movement',
+						},
+						{ label: 'Add Combat', slug: 'guides/adding-combat' },
+						{ label: 'Add Mineral Income', slug: 'guides/adding-mineral-income' },
+						{ label: 'Build the HUD', slug: 'guides/building-the-hud' },
+						{ label: 'Build Production Buildings', slug: 'guides/building-production-buildings' },
+						{ label: 'Production and Research', slug: 'guides/adding-production-and-research' },
+						{ label: 'Transport Truck', slug: 'guides/adding-the-transport-truck' },
+						{ label: 'Fog and Minimap', slug: 'guides/adding-fog-and-a-minimap' },
+						{ label: 'Skirmish Lobby', slug: 'guides/creating-the-skirmish-lobby' },
+						{ label: 'Package and Verify', slug: 'guides/packaging-and-verifying-the-demo' },
 					],
 				},
 				{

@@ -25,6 +25,7 @@
 #include "CoreMinimal.h"
 #include "Components/SeinPayload.h"
 #include "Components/SeinProductionPayload.h"
+#include "Components/SeinProductionPolicy.h"
 #include "Effects/SeinEffect.h"  // full type required for TSubclassOf<USeinEffect>.Get() in GetTypeHash
 #include "GameplayTagContainer.h"
 #include "Types/FixedPoint.h"
@@ -38,6 +39,14 @@ struct SEINARTSCOREENTITY_API FSeinProduciblePayload : public FSeinPayload
 	/** Time in sim-seconds to produce this entity. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
 	FFixedPoint BuildTime = FFixedPoint::FromInt(10);
+
+	/** Limits queued plus successfully completed items of this exact class. Cancellation releases allowance; completion consumes it permanently. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
+	ESeinProductionQueuePolicy QueuePolicy = ESeinProductionQueuePolicy::MultiQueueable;
+
+	/** Maximum queued plus successfully completed items under a fixed-amount policy. Must be at least 1. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS", meta = (ClampMin = "1", EditCondition = "QueuePolicy == ESeinProductionQueuePolicy::FixedAmountPerProductionUnit || QueuePolicy == ESeinProductionQueuePolicy::FixedAmountPerPlayer", EditConditionHides))
+	int32 QueueAmount = 1;
 
 	/** Tech tags the owning player must have unlocked to produce/research this.
 	 *  Used by UI for greying production buttons; the actual gate at activation
@@ -70,6 +79,8 @@ struct SEINARTSCOREENTITY_API FSeinProduciblePayload : public FSeinPayload
 FORCEINLINE uint32 GetTypeHash(const FSeinProduciblePayload& Component)
 {
 	uint32 Hash = GetTypeHash(Component.BuildTime);
+	Hash = HashCombine(Hash, GetTypeHash(static_cast<uint8>(Component.QueuePolicy)));
+	Hash = HashCombine(Hash, GetTypeHash(Component.QueueAmount));
 	// FGameplayTagContainer has no GetTypeHash overload — iterate tags
 	// individually (mirrors FSeinEntityTagState's approach).
 	for (const FGameplayTag& Tag : Component.PrerequisiteTags)

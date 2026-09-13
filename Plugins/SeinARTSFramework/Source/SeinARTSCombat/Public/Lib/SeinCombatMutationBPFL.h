@@ -47,7 +47,7 @@ public:
 	 *  the sim rejects the call: no world, unauthorized timing, or a Target
 	 *  that is no longer alive — notify BEFORE you Destroy Entity. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Combat",
-		meta = (WorldContext = "WorldContextObject", DisplayName = "Notify Damage Applied"))
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Notify Damage Applied", SeinDeterministic))
 	static bool SeinNotifyDamageApplied(
 		const UObject* WorldContextObject,
 		FSeinEntityHandle Target,
@@ -78,7 +78,7 @@ public:
 	 *  event, just no Kill attribution. Returns false when the sim rejects the
 	 *  call. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Combat",
-		meta = (WorldContext = "WorldContextObject", DisplayName = "Notify Death"))
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Notify Death", SeinDeterministic))
 	static bool SeinNotifyDeath(
 		const UObject* WorldContextObject,
 		FSeinEntityHandle Dying,

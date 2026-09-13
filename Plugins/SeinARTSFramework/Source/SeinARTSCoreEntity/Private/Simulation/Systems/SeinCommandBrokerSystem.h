@@ -72,6 +72,7 @@ namespace SeinCommandBrokerDispatch
 		// Empty for typical right-click flows; non-empty for targeter-UI
 		// flows that already captured multi-point intent at click time.
 		Cmd.TargeterPoints = MD.TargeterPoints;
+		Cmd.ActivationInputs = MD.ActivationInputs;
 		Cmd.DerivedResourcePayer = DerivedResourcePayer;
 		Cmd.IssuerKind = ESeinCommandIssuerKind::DeterministicSystem;
 		return Cmd;
@@ -447,6 +448,7 @@ namespace SeinCommandBrokerDispatch
 		Input.FormationTag = Order.FormationTag;
 		Input.EffectiveMembers = Effective;
 		Input.TargeterPoints = Order.TargeterPoints;
+		Input.ActivationInputs = Order.ActivationInputs;
 		Input.PredeterminedAbilityTag = Order.PredeterminedAbilityTag;
 		Input.PreplacedMembers = Order.PreplacedMembers;
 		Input.PreplacedPositions = Order.PreplacedPositions;

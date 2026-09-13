@@ -8,7 +8,9 @@
  *          path can still go stale (renamed/deleted mode, stripped Movement+ plugin) or point at an
  *          abstract base. At runtime an unresolvable/abstract MovementClass SILENTLY falls back to
  *          USeinBasicMovement — so a unit that should drive wheeled just moves like basic infantry,
- *          with no warning. This validator surfaces that at save / validate time. Warnings only.
+ *          with no warning. This validator surfaces that fallback as a warning at save / validate
+ *          time. Invalid Movement Ability selections fail validation: they must reference an
+ *          already-granted, concrete, non-passive Point ability with a valid tag.
  */
 
 #pragma once

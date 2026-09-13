@@ -87,10 +87,7 @@ Sim-affecting settings owned by this plugin or an extension participate in
 Economy behavior is composed through abilities rather than a hardcoded worker type. Node stock and
 worker cargo live in deterministic components accessed through typed component nodes; dropoff calls
 **Grant Income** from an authorized simulation callback. Income validates the whole resource map
-atomically and saturates valid uncapped overflow. Worker construction calls **Add Construction
-Progress** against `FSeinConstructionPayload`; only positive, non-overflowing increments mutate,
-completion removes the component and releases only the framework-owned
-`State.UnderConstruction` grant. Designer-authored ownership of that tag remains intact.
+atomically and saturates valid uncapped overflow. Construction uses persistent `FSeinConstructionPayload` settings and explicit job handles. Start Queued for Construction defaults off; Queue, Start, Pause and Complete Construction own lifecycle transitions. Work fields live in the existing FSeinConstructionPayload and Sein Construction authoring component. Add Construction Work and work queries use those fields; the threshold does not change lifecycle or gate completion. There is no separate work component. Explicit entity presentation groups replace automatic mesh hiding, and generic entity binding supplies widget and managed-actor context. Completion preserves the component, applies the captured effect once and releases only the framework-owned `State.UnderConstruction` grant. Stage tags and render delegates support designer presentation; see [.agents/CONSTRUCTION_LIFECYCLE.md](../../.agents/CONSTRUCTION_LIFECYCLE.md).
 
 Combat is designer-owned. The framework ships NO vitals, weapon, damage, or projectile schema
 and no combat tick systems: what a unit's stats are, how a hit is computed, how fast a weapon

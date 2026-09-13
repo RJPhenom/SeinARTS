@@ -55,6 +55,7 @@ void FSeinARTSLevelDataModule::StartupModule()
 	}
 
 	FSeinSimulationContentContributorDescriptor ContentDescriptor;
+	ContentDescriptor.OwnerModule = TEXT("SeinARTSLevelData");
 	ContentDescriptor.StableContributorId = TEXT("seinarts.leveldata");
 	ContentDescriptor.ContributorRevision = 1;
 	ContentDescriptor.DiscoveryRoots = {

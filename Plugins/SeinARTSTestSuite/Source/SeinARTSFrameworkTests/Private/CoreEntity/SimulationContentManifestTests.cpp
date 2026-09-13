@@ -1,6 +1,7 @@
 #include "CQTest.h"
 
 #include "Serialization/SeinSimulationContentManifest.h"
+#include "Serialization/SeinSimulationContentBuildArtifact.h"
 
 namespace UE::SeinARTSTests
 {
@@ -67,6 +68,49 @@ namespace UE::SeinARTSTests
 			Profile.Records.Add(MoveTemp(Record));
 			return Profile;
 		}
+	}
+
+	TEST(BuildArtifactRoundTripRejectsTruncationAndTampering,
+		"SeinARTS.Unit.SimulationContent.BuildArtifact")
+	{
+		FString Error;
+		FSeinSimulationContentRecord Record;
+		ASSERT_THAT(IsTrue(MakeRecord(TEXT("/Game/CookedMap"), 1, Record, Error)));
+		auto Profile = MakeProfile(MakeContributor(TEXT("sein.test"), 1, FGuid(1,2,3,4)), Record);
+		ASSERT_THAT(IsTrue(FSeinSimulationContentManifestCodec::SealProfile(
+			FSeinSimulationContentManifestCodec::CurrentFormatVersion, Profile, Error)));
+		TArray<uint8> Bytes;
+		ASSERT_THAT(IsTrue(FSeinSimulationContentBuildArtifact::Encode(Profile, Bytes, Error)));
+		FSeinSimulationContentManifestProfile Decoded;
+		ASSERT_THAT(IsTrue(FSeinSimulationContentBuildArtifact::Decode(Bytes, Decoded, Error)));
+		ASSERT_THAT(IsTrue(Decoded == Profile));
+		for (int32 Length = 0; Length < Bytes.Num(); ++Length)
+		{
+			ASSERT_THAT(IsFalse(FSeinSimulationContentBuildArtifact::Decode(
+				MakeArrayView(Bytes.GetData(), Length), Decoded, Error)));
+			ASSERT_THAT(IsFalse(Decoded.RootDigest.IsValid()));
+		}
+		Bytes.Last() ^= 1;
+		ASSERT_THAT(IsFalse(FSeinSimulationContentBuildArtifact::Decode(Bytes, Decoded, Error)));
+		Bytes.Last() ^= 1;
+		Bytes.Add(0);
+		ASSERT_THAT(IsFalse(FSeinSimulationContentBuildArtifact::Decode(Bytes, Decoded, Error)));
+	}
+
+	TEST(EditorEvidenceCannotMatchRecordsFreeBuildEvidence,
+		"SeinARTS.Unit.SimulationContent.BuildArtifact")
+	{
+		FString Error;
+		FSeinSimulationContentManifestProfile Saved;
+		Saved.BuilderRevision = FSeinSimulationContentManifestCodec::CurrentBuilderRevision;
+		Saved.Contributors.Add(MakeContributor(TEXT("sein.test"), 1, FGuid(1,2,3,4)));
+		ASSERT_THAT(IsTrue(FSeinSimulationContentManifestCodec::SealProfile(
+			FSeinSimulationContentManifestCodec::CurrentFormatVersion, Saved, Error)));
+		FSeinSimulationContentManifestProfile Editor;
+		ASSERT_THAT(IsTrue(FSeinSimulationContentManifestCodec::BuildEditorSessionProfile(Saved.Contributors, Editor, Error)));
+		ASSERT_THAT(IsTrue(Editor.RootDigest != Saved.RootDigest));
+		FSeinSimulationContentManifestProfile Duplicate;
+		ASSERT_THAT(IsFalse(FSeinSimulationContentManifestCodec::BuildEditorSessionProfile(Editor.Contributors, Duplicate, Error)));
 	}
 
 	TEST(SimulationContentManifestCanonicalizesOrderAndDuplicates,

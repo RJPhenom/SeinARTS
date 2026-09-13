@@ -349,6 +349,7 @@ namespace
 
 		OutDescriptor.ContributorRevision =
 			Descriptor.ContributorRevision;
+		OutDescriptor.OwnerModule = Descriptor.OwnerModule;
 		FSeinCanonicalDigestWriter Writer(
 			TEXT("SeinARTS.SimulationContent.DiscoveryContract"),
 			1);
@@ -398,6 +399,7 @@ namespace
 		const FSeinFrozenSimulationContentContributor& Right)
 	{
 		return Left.StableContributorId == Right.StableContributorId
+			&& Left.OwnerModule == Right.OwnerModule
 			&& Left.ContributorRevision == Right.ContributorRevision
 			&& Left.DiscoveryContractDigest
 				== Right.DiscoveryContractDigest
@@ -860,6 +862,7 @@ bool FSeinSimulationContentRegistry::BuildManifestContributorRecords(
 			Contributor.StableContributorId;
 		InputDescriptor.ContributorRevision =
 			Contributor.ContributorRevision;
+		InputDescriptor.OwnerModule = Contributor.OwnerModule;
 		InputDescriptor.DiscoveryRoots =
 			Contributor.DiscoveryRoots;
 		InputDescriptor.ExplicitPackageRoots =

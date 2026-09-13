@@ -31,17 +31,20 @@ struct SEINARTSUITOOLKIT_API FSeinProductionQueueItemInfo
 {
 	GENERATED_BODY()
 
+	/** Entity that owns this queue. Use with QueueIndex when requesting cancellation. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|UI|Production")
+	FSeinEntityHandle QueueOwner;
+
 	/** 0 = front (currently building), 1+ = waiting in line. Use as the
 	 *  argument for `MakeCancelProductionCommand` when wiring a click-to-cancel. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|UI|Production")
 	int32 QueueIndex = 0;
 
-	/** Display name from the producible's identity (or effect name for research). */
+	/** Display name from the queued class's identity, including research items. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|UI|Production")
 	FText DisplayName;
 
-	/** Icon from the producible's identity. Null if the producible has no icon set
-	 *  or for research entries (fall back to a research-icon convention in your widget). */
+	/** Icon from the queued class's identity. Null when no identity icon is authored. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|UI|Production")
 	TObjectPtr<UTexture2D> Icon = nullptr;
 

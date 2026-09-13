@@ -229,6 +229,8 @@ namespace UE::SeinARTSTests::BalanceData
 
 	bool SaveAssetPackage(UPackage& Package, UObject& Asset)
 	{
+		Package.FullyLoad();
+		if (!Package.IsFullyLoaded()) return false;
 		const FString Filename = FPackageName::LongPackageNameToFilename(
 			Package.GetName(),
 			FPackageName::GetAssetPackageExtension());
@@ -237,7 +239,7 @@ namespace UE::SeinARTSTests::BalanceData
 		FSavePackageArgs SaveArgs;
 		SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
 		SaveArgs.SaveFlags = SAVE_None;
-		SaveArgs.Error = GError;
+		SaveArgs.Error = GWarn;
 		return UPackage::SavePackage(
 			&Package,
 			&Asset,
@@ -566,6 +568,8 @@ namespace UE::SeinARTSTests::BalanceData
 			nullptr,
 			*DesignerStructPath);
 		ASSERT_THAT(IsNotNull(DesignerStruct));
+		DesignerStruct->GetOutermost()->FullyLoad();
+		ASSERT_THAT(IsTrue(DesignerStruct->GetOutermost()->IsFullyLoaded()));
 		ASSERT_THAT(IsTrue(
 			SeinComponentEligibility::IsEntityComponentStruct(
 				DesignerStruct)));

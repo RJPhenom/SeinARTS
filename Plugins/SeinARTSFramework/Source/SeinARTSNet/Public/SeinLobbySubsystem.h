@@ -271,6 +271,14 @@ public:
 	void NotifyLobbyStateActorBeginPlay(ASeinLobbyState* Actor);
 	void NotifyLobbyStateActorEndPlay(ASeinLobbyState* Actor);
 
+	/** Rebinds only the old controller's existing seat during server seamless travel. */
+	bool RebindSeamlessController(APlayerController* OldController, APlayerController* NewController);
+
+#if WITH_DEV_AUTOMATION_TESTS
+	void LoginControllerForTests(AGameModeBase* GameMode, APlayerController* Controller) { OnPostLogin(GameMode, Controller); }
+	void LogoutControllerForTests(APlayerController* Controller);
+#endif
+
 	/** Resolve the GI's faction service. Loads the configured class lazily
 	 *  if it differs from the framework default (ShouldCreateSubsystem
 	 *  ensures only one instance exists). Returns null only if the GI is

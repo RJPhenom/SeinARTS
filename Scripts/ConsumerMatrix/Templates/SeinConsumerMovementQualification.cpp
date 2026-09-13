@@ -2,9 +2,9 @@
 
 #include "Abilities/SeinMoveToProxy.h"
 #include "Actor/SeinEntityComponent.h"
-#include "Components/SeinAbilityComponent.h"
-#include "Components/SeinMovementComponent.h"
-#include "Components/SeinNavigationComponent.h"
+#include "Components/SeinAbilityPayload.h"
+#include "Components/SeinMovementPayload.h"
+#include "Components/SeinNavigationPayload.h"
 #include "Data/SeinWheeledMovementData.h"
 #include "Movement/SeinWheeledVehicleMovement.h"
 #include "NativeGameplayTags.h"
@@ -23,7 +23,7 @@ USeinConsumerQualificationMoveAbility::
 {
 	AbilityName = FText::FromString(TEXT("Consumer Qualification Move"));
 	AbilityTag = TAG_SeinConsumerQualificationMove;
-	bIsMoveAbility = true;
+	TargetType = ESeinAbilityTargetType::Point;
 }
 
 void USeinConsumerQualificationMoveAbility::OnActivate_Implementation()
@@ -112,7 +112,8 @@ ASeinConsumerMovementUnit::ASeinConsumerMovementUnit()
 	Bridge->bIsAbstract = true;
 	Bridge->ComponentData.Reset();
 
-	FSeinMovementComponent Movement;
+	FSeinMovementPayload Movement;
+	Movement.DefaultMoveAbility = USeinConsumerQualificationMoveAbility::StaticClass();
 	Movement.MovementClass = FSoftClassPath(
 		USeinWheeledVehicleMovement::StaticClass());
 	// Keep the qualification order active across the bounded adverse-network
@@ -127,14 +128,14 @@ ASeinConsumerMovementUnit::ASeinConsumerMovementUnit()
 		FSeinWheeledMovementData());
 	Bridge->ComponentData.Add(FInstancedStruct::Make(Movement));
 
-	FSeinNavigationComponent Navigation;
+	FSeinNavigationPayload Navigation;
 	Navigation.FallbackFootprintRadius = FFixedPoint::FromInt(85);
 	Navigation.AcceptanceRadius = FFixedPoint::FromInt(80);
 	Navigation.RepathMode = ESeinRepathMode::OffPathOnly;
 	Navigation.OffPathThreshold = FFixedPoint::FromInt(10000);
 	Bridge->ComponentData.Add(FInstancedStruct::Make(Navigation));
 
-	FSeinAbilityComponent Abilities;
+	FSeinAbilityPayload Abilities;
 	Abilities.GrantedAbilities.Add(
 		USeinConsumerQualificationMoveAbility::StaticClass());
 	Bridge->ComponentData.Add(FInstancedStruct::Make(Abilities));

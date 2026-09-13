@@ -15,9 +15,39 @@
 #include "Details/SeinEntityComponentDetails.h"
 
 #include "Components/SeinPayload.h"
+#include "Authoring/SeinEntityComponent.h"
+#include "Details/SeinAutoTagDetails.h"
 #include "DetailLayoutBuilder.h"
 #include "Details/SeinSemanticDefault.h"
 #include "UObject/UnrealType.h"
+#include "ClassViewerFilter.h"
+#include "PropertyRestriction.h"
+#include "Util/SeinDefaultMoveAbilityAuthoring.h"
+#include "Components/SeinMovementPayload.h"
+
+namespace
+{
+	class FDefaultMoveAbilityFilter final : public IClassViewerFilter
+	{
+	public:
+		TArray<TWeakObjectPtr<UObject>> Contexts;
+		virtual bool IsClassAllowed(const FClassViewerInitializationOptions&, const UClass* Class,
+			TSharedRef<FClassViewerFilterFuncs>) override
+		{
+			if (Contexts.IsEmpty() || !SeinDefaultMoveAbilityAuthoring::IsEligibleClass(Class)) return false;
+			FText Error;
+			for (const auto& Context : Contexts)
+				if (!Context.IsValid() || !SeinDefaultMoveAbilityAuthoring::ValidateSelection(*Context, Class, Error)) return false;
+			return true;
+		}
+		virtual bool IsUnloadedClassAllowed(const FClassViewerInitializationOptions&,
+			const TSharedRef<const IUnloadedBlueprintData>, TSharedRef<FClassViewerFilterFuncs>) override
+		{
+			// GrantedAbilities holds class references, so every eligible grant is loaded.
+			return false;
+		}
+	};
+}
 
 TSharedRef<IDetailCustomization> FSeinEntityComponentDetails::MakeInstance()
 {
@@ -32,6 +62,9 @@ void FSeinEntityComponentDetails::CustomizeDetails(
 	{
 		return;
 	}
+
+	if (ComponentClass->IsChildOf(USeinIdentityComponent::StaticClass()))
+		SeinAutoTagDetails::AddIdentityActions(DetailBuilder);
 
 	// Native authoring components expose exactly one editable payload struct
 	// flattened with ShowOnlyInnerProperties. Find it by contract rather than
@@ -54,6 +87,22 @@ void FSeinEntityComponentDetails::CustomizeDetails(
 				Property->GetOwnerStruct());
 		if (PayloadHandle->IsValidHandle())
 		{
+			if (Property->Struct == FSeinMovementPayload::StaticStruct())
+			{
+				const auto Selection = PayloadHandle->GetChildHandle(
+					GET_MEMBER_NAME_CHECKED(FSeinMovementPayload, DefaultMoveAbility));
+				if (Selection.IsValid())
+				{
+					TArray<UObject*> Contexts;
+					Selection->GetOuterObjects(Contexts);
+					const auto Filter = MakeShared<FDefaultMoveAbilityFilter>();
+					for (UObject* Context : Contexts) Filter->Contexts.Add(Context);
+					const auto Restriction = MakeShared<FPropertyRestriction>(
+						FText::FromString(TEXT("Choose a granted, non-passive Point ability.")));
+					Restriction->AddClassFilter(Filter);
+					Selection->AddRestriction(Restriction);
+				}
+			}
 			if (IDetailPropertyRow* Row =
 				DetailBuilder.EditDefaultProperty(PayloadHandle))
 			{

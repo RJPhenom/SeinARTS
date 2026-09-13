@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinWorldSubsystem.h
  * @brief   World subsystem managing the deterministic simulation.
@@ -14,6 +14,7 @@
 #include "Types/FixedPoint.h"
 #include "Types/Random.h"
 #include "Core/SeinEntityHandle.h"
+#include "Components/SeinConstructionTypes.h"
 #include "Core/SeinEntityPool.h"
 #include "Core/SeinPlayerID.h"
 #include "Core/SeinFactionID.h"
@@ -457,9 +458,9 @@ DECLARE_DELEGATE_RetVal_TwoParams(bool, FSeinLineOfSightResolver,
  * Return true = all cells covered by Shape at (Center, Yaw) are walkable for
  * the layer mask. False = pre-reject with FootprintBlocked.
  *
- * Sim skips the gate if no resolver is registered (tests, nav-less games);
- * abilities with bRequiresFreeFootprint=true effectively become no-op gates
- * in that case rather than always-rejecting.
+ * Without a resolver (tests, nav-less games), placement skips only the baked
+ * navigation check. The shared placement validator still checks live entities
+ * and requires valid authored footprint data.
  */
 DECLARE_DELEGATE_RetVal_FourParams(bool, FSeinFootprintPlacementResolver,
 	const FFixedVector& /*CenterWorld*/, const FFixedPoint& /*YawDegrees*/,
@@ -1021,6 +1022,40 @@ public:
 	 *  only: Blueprint mutation libraries call this before touching raw state. */
 	bool RequireStateMutationAuthorization(const TCHAR* Operation) const;
 
+	/** Prevent render and observer callbacks from inheriting bootstrap or simulation mutation authority. */
+	class FReadOnlyObserverScope
+	{
+	public:
+		explicit FReadOnlyObserverScope(USeinWorldSubsystem& World)
+			: ReadOnly(World.bReadOnlyCallbackInProgress, true), Observer(World.bObserverCallbackInProgress, true) {}
+	private:
+		TGuardValue<bool> ReadOnly;
+		TGuardValue<bool> Observer;
+	};
+
+	/** Cancel a zero-based production queue entry, refunding its captured payer
+	 *  under its refund policy. Shared by commands and ability callbacks; requires
+	 *  mutation authorization. Returns false if no entry can be cancelled. */
+	bool CancelProduction(FSeinEntityHandle Producer, int32 QueueIndex);
+
+	/** Shared read-only admission check; counts waiting, active, stalled, and completed items. */
+	ESeinProductionQueueResult CheckProductionQueue(FSeinEntityHandle Producer,
+		TSubclassOf<ASeinActor> ProducibleClass, FSeinProductionQueueSettings& OutSettings,
+		int64& OutUsed) const;
+
+	/** Deterministic producer override. A null settings pointer clears the override. */
+	bool SetProducerQueueSettings(FSeinEntityHandle Producer, TSubclassOf<ASeinActor> ProducibleClass,
+		const FSeinProductionQueueSettings* Settings);
+
+	/** Deterministic player override. Producer overrides take precedence. Null clears. */
+	bool SetPlayerQueueSettings(FSeinPlayerID Player, TSubclassOf<ASeinActor> ProducibleClass,
+		const FSeinProductionQueueSettings* Settings);
+
+	/** Reserve completion history before detaching an entry. Roll back only if completion fails. */
+	FSeinProductionCompletionClaim BeginProductionCompletion(FSeinEntityHandle Producer,
+		FSeinPlayerID Player, TSubclassOf<ASeinActor> ProducibleClass);
+	void RollBackProductionCompletion(const FSeinProductionCompletionClaim& Claim);
+
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Simulation")
 	bool IsSimulationRunning() const { return bIsRunning; }
 
@@ -1370,6 +1405,9 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Entity")
 	FSeinEntityHandle SpawnEntity(TSubclassOf<ASeinActor> ActorClass, const FFixedTransform& SpawnTransform, FSeinPlayerID OwnerPlayerID);
+
+	/** Shared native spawn implementation with an optional atomic construction override. */
+	FSeinEntityHandle SpawnEntityWithConstruction(TSubclassOf<ASeinActor> ActorClass, const FFixedTransform& SpawnTransform, FSeinPlayerID OwnerPlayerID, const ESeinConstructionInitialState* InitialConstruction);
 
 	/**
 	 * Spawn a sim entity for an already-existing (level-placed) ASeinActor.
@@ -1724,6 +1762,11 @@ public:
 	/** Pool lookup. Returns null on INDEX_NONE / out-of-range / unregistered. */
 	USeinAbility* GetAbilityInstance(int32 AbilityID) const;
 
+	/** Resolve Movement.DefaultMoveAbility to its exact live grant. Returns null
+	 *  for empty, revoked, passive, non-point, or invalid-tag selections. Does
+	 *  not grant abilities, select alternatives, or bypass activation gates. */
+	USeinAbility* ResolveDefaultMoveAbility(FSeinEntityHandle Entity) const;
+
 	/** Reverse lookup used by exact continuation capture; INDEX_NONE if absent. */
 	int32 FindAbilityInstanceID(const USeinAbility* Ability) const;
 
@@ -1820,7 +1863,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Tags")
 	void ReplaceBaseTags(FSeinEntityHandle Handle, const FGameplayTagContainer& NewBaseTags);
 
-	/** Returns a copy of the entity handles currently carrying the tag. */
+	/** Returns entities carrying this exact tag. Child tags are not included; Has Tag uses hierarchical matching. */
 	UFUNCTION(BlueprintPure, Category = "SeinARTS|Tags")
 	TArray<FSeinEntityHandle> GetEntitiesWithTag(FGameplayTag Tag) const;
 

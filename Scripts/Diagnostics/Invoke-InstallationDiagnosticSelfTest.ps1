@@ -92,24 +92,26 @@ try {
 			Enabled = $true
 		})
 	})
-	Write-Utf8NoBom (Join-Path $PassProject 'Config\DefaultGame.ini') @'
-[/Script/SeinARTSCoreEntity.SeinARTSCoreSettings]
-SimulationContentManifest=/Game/SeinARTS/Manifest.Manifest
-'@
-	$PassManifest = Join-Path $PassProject 'Content\SeinARTS\Manifest.uasset'
-	New-Item -ItemType Directory -Path (Split-Path -Parent $PassManifest) `
-		-Force | Out-Null
-	[System.IO.File]::WriteAllBytes($PassManifest, [byte[]]@(0))
 	$Pass = Invoke-Diagnostic `
 		(Join-Path $PassProject 'Game.uproject') $PassEngine
 	if ($Pass.ExitCode -ne 0 -or
 		[string]$Pass.Report.result -cne 'Passed' -or
 		[int]$Pass.Report.errorCount -ne 0 -or
+		[string]$Pass.Report.simulationContentMode -cne 'AutomaticCook' -or
 		[string]$Pass.Report.integrationMode -cne 'Release' -or
 		[string]$Pass.Report.cohortVersion -cne '1.2.3-alpha.1+build.5') {
 		throw 'Valid nested release fixture did not produce the expected pass receipt.'
 	}
 
+	foreach ($RecoveryPath in @('None', '/Game/Missing.Manifest', '/Game/../Config/Foo.Foo')) {
+		Write-Utf8NoBom (Join-Path $PassProject 'Config\DefaultGame.ini') (
+			"[/Script/SeinARTSCoreEntity.SeinARTSCoreSettings]`r`nSimulationContentManifest=$RecoveryPath`r`n")
+		$Optional = Invoke-Diagnostic (Join-Path $PassProject 'Game.uproject') $PassEngine
+		if ($Optional.ExitCode -ne 0 -or [int]$Optional.Report.errorCount -ne 0 -or
+			[string]$Optional.Report.simulationContentMode -cne 'AutomaticCook') {
+			throw "Optional recovery reference '$RecoveryPath' incorrectly blocked installation."
+		}
+	}
 	$FailRoot = Join-Path $FixtureRoot 'Fail'
 	$FailProject = Join-Path $FailRoot 'Game'
 	$FailEngine = Join-Path $FailRoot 'FakeUE58'
@@ -159,7 +161,7 @@ SimulationContentManifest=/Game/../Config/Foo.Foo
 	$ActualCodes = @($Fail.Report.findings | Where-Object {
 		[string]$_.severity -ceq 'Error'
 	} | ForEach-Object { [string]$_.code } | Sort-Object)
-	$ExpectedCodes = @('SEIN031', 'SEIN036', 'SEIN042', 'SEIN054')
+	$ExpectedCodes = @('SEIN031', 'SEIN036', 'SEIN042')
 	if ($Fail.ExitCode -ne 1 -or
 		[string]$Fail.Report.result -cne 'Failed' -or
 		(@(Compare-Object $ActualCodes $ExpectedCodes)).Count -ne 0) {

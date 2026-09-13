@@ -7,9 +7,12 @@
  */
 
 #include "Targeter/SeinTargeterPreview.h"
+#include "Targeter/SeinTargeterVisualComponent.h"
+#include "Components/SceneComponent.h"
 
 ASeinTargeterPreview::ASeinTargeterPreview()
 {
+	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("PreviewRoot"));
 	PrimaryActorTick.bCanEverTick = true;
 	// Subsystem drives state via UpdatePreview; we don't need world ticks for
 	// state tracking, but BP subclasses may want their own per-frame logic.
@@ -43,7 +46,7 @@ void ASeinTargeterPreview::UpdatePreview(const FVector& CursorWorld, const FVect
 	// cursor-centered. Subclasses that need different transforms (line specs
 	// anchor at the drag origin, building specs snap to footprint cells) can
 	// override OnPreviewUpdated and set their own transform.
-	SetActorLocation(CursorWorld);
+	if (bFollowResolvedTarget) SetActorLocation(CursorWorld);
 	OnPreviewUpdated();
 }
 
@@ -51,4 +54,49 @@ void ASeinTargeterPreview::NotifyPointCaptured(
 	const FVector& StartWorld, const FVector& EndWorld)
 {
 	OnPointCaptured(StartWorld, EndWorld);
+}
+
+void ASeinTargeterPreview::BeginPreview(const FSeinTargeterPreviewContext& InContext)
+{
+	if (bPresentationStarted || bPresentationEnded) return;
+	Context = InContext;
+	PrepareVisuals();
+	TInlineComponentArray<USeinTargeterVisualComponent*> Visuals(this);
+	for (auto* Visual : Visuals) Visual->InitializeVisual(Context);
+	bPresentationStarted = true;
+	OnPreviewInitialized();
+	if (!bPresentationEnded) Present(InContext);
+}
+
+void ASeinTargeterPreview::Present(const FSeinTargeterPreviewContext& InContext)
+{
+	if (bPresentationEnded) return;
+	const auto Previous = Context.Validity;
+	const bool Changed = !bHasPresented || Previous != InContext.Validity
+		|| !Context.ValidityReason.EqualTo(InContext.ValidityReason);
+	Context = InContext;
+	bCaptureHasAnchor = Context.bHasAnchor;
+	CurrentCursorWorld = Context.CursorWorld;
+	CurrentDragAnchorWorld = Context.AnchorWorld;
+	CurrentValidity = Context.Validity;
+	CurrentDragYawDegrees = Context.ResolvedTarget.Rotator().Yaw;
+	if (bFollowResolvedTarget) SetActorLocationAndRotation(Context.ResolvedTarget.GetLocation(), Context.ResolvedTarget.GetRotation());
+	TInlineComponentArray<USeinTargeterVisualComponent*> Visuals(this);
+	for (auto* Visual : Visuals) Visual->UpdateVisual(Context);
+	bHasPresented = true;
+	if (Changed) OnValidityChanged(Previous);
+	if (!bPresentationEnded) OnPreviewUpdated();
+}
+
+void ASeinTargeterPreview::EndPreview(ESeinPreviewEndReason Reason, bool bNotify)
+{
+	if (bPresentationEnded) return;
+	bPresentationEnded = true;
+	if (bNotify) OnPreviewEnded(Reason);
+}
+
+void ASeinTargeterPreview::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (bPresentationStarted) EndPreview(ESeinPreviewEndReason::Unavailable);
+	Super::EndPlay(EndPlayReason);
 }

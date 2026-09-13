@@ -12,6 +12,7 @@
 #include "Misc/DataValidation.h"
 #include "StructUtils/InstancedStruct.h"
 #include "UObject/Class.h"
+#include "Util/SeinDefaultMoveAbilityAuthoring.h"
 
 #define LOCTEXT_NAMESPACE "SeinMovementClassValidator"
 
@@ -53,6 +54,12 @@ EDataValidationResult USeinMovementClassValidator::ValidateLoadedAsset_Implement
 	}
 
 	UClass* const MovementBase = GetSeinMovementBaseClass();
+	FText SelectionError;
+	if (!SeinDefaultMoveAbilityAuthoring::ValidateEntity(*BP, SelectionError))
+	{
+		AssetFails(InAsset, SelectionError);
+		return EDataValidationResult::Invalid;
+	}
 
 	// Walk the entity bridge's authored ComponentData for FSeinMovementPayload entries and check
 	// each MovementClass. (The bridge is a native subobject, so GetComponents finds it on the CDO.)

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SeinARTS Framework 
  * Copyright (c) 2026 Phenom Studios, Inc.
  *
@@ -182,7 +182,7 @@ namespace
 {
 	const TCHAR* GCoreEntitySimulationContentContributorId =
 		TEXT("seinarts.coreentity");
-	constexpr uint32 GSimulationContentContributorRevision = 4;
+	constexpr uint32 GSimulationContentContributorRevision = 8;
 
 	TArray<FCoreRedirect> CooldownScopeRedirects()
 	{
@@ -374,7 +374,7 @@ namespace
 
 	const FName BuiltInCommandSchemaOwner(TEXT("SeinARTSCoreEntity.Commands"));
 	// Bump whenever built-in command semantics change without a wire-shape change.
-	constexpr int32 BuiltInCommandImplementationRevision = 5;
+	constexpr int32 BuiltInCommandImplementationRevision = 8;
 
 	constexpr int32 AllCommandExecutionAllowances =
 		static_cast<int32>(ESeinCommandExecutionAllowance::Spectator)
@@ -566,7 +566,7 @@ bool FSeinARTSCoreEntity::ValidateConfiguredCanonicalStateRecipes(
 	if (CurrentPaths != ConfiguredCanonicalStateRecipePaths)
 	{
 		OutError =
-			TEXT("Canonical State Recipes changed after CoreEntity module startup. Restart the editor (or reload the module), then regenerate the Simulation Content manifest before launching a match.");
+			TEXT("Canonical State Recipes changed after CoreEntity module startup. Restart the editor (or reload the module) before launching a match. Packaged games must be rebuilt after changing recipe contracts.");
 		return false;
 	}
 	return true;
@@ -621,7 +621,7 @@ void FSeinARTSCoreEntity::StartupModule()
 			nullptr, ESeinCommandAuthorityScope::Entity, 0, 0, 0, 0, 0 },
 		{ TEXT("SeinARTS.Core.Command.Ping.V1"), SeinARTSTags::Command_Type_Ping,
 			nullptr, ESeinCommandAuthorityScope::Self, 0, 0, 0, 0, AllCommandExecutionAllowances },
-		{ TEXT("SeinARTS.Core.Command.BrokerOrder.V4"), SeinARTSTags::Command_Type_BrokerOrder,
+		{ TEXT("SeinARTS.Core.Command.BrokerOrder.V5"), SeinARTSTags::Command_Type_BrokerOrder,
 			FSeinBrokerOrderPayload::StaticStruct(), ESeinCommandAuthorityScope::EntitySet,
 			SeinBrokerOrderProtocol::MaxMembers, 0,
 			SeinBrokerOrderProtocol::MaxPayloadBytes,
@@ -697,6 +697,7 @@ void FSeinARTSCoreEntity::StartupModule()
 	UE_LOG(LogSeinSim, Log, TEXT("Registered %d built-in command schemas."), BuiltInCommandSchemaHandles.Num());
 
 	FSeinSimulationContentContributorDescriptor ContentDescriptor;
+	ContentDescriptor.OwnerModule = TEXT("SeinARTSCoreEntity");
 	ContentDescriptor.StableContributorId =
 		GCoreEntitySimulationContentContributorId;
 	ContentDescriptor.ContributorRevision =

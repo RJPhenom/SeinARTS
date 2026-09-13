@@ -1,4 +1,5 @@
 #include "CoreGlobals.h"
+#include "HAL/IConsoleManager.h"
 #include "Misc/CoreDelegates.h"
 #include "Misc/PackageName.h"
 #include "Modules/ModuleInterface.h"
@@ -78,6 +79,13 @@ class FSeinARTSTestSupportModule final : public IModuleInterface
 public:
 	virtual void StartupModule() override
 	{
+		// This suite deliberately supplies saved-content fixtures. Ordinary
+		// editor sessions never opt into this mode or load those fixtures.
+		StrictMode = IConsoleManager::Get().FindConsoleVariable(TEXT("Sein.SimulationContent.RequireFreshManifestForPIE"));
+		if (StrictMode)
+		{
+			PreviousStrictMode = StrictMode->GetInt();
+		}
 		if (IsEngineStartupModuleLoadingComplete())
 		{
 			InstallSimulationContentFixture();
@@ -95,6 +103,7 @@ public:
 	{
 		RemoveAllModulesLoadedDelegate();
 		RestoreSimulationContentSetting();
+		if (StrictMode) StrictMode->Set(PreviousStrictMode, ECVF_SetByCode);
 	}
 
 private:
@@ -241,6 +250,7 @@ private:
 		Settings->SimulationContentManifest =
 			TSoftObjectPtr<USeinSimulationContentManifest>(
 				TransientManifest.Get());
+		if (StrictMode) StrictMode->Set(1, ECVF_SetByCode);
 
 		UE_LOG(
 			LogSeinARTSTestSupport,
@@ -264,6 +274,8 @@ private:
 	}
 
 	FDelegateHandle AllModulesLoadedHandle;
+	IConsoleVariable* StrictMode = nullptr;
+	int32 PreviousStrictMode = 0;
 	TStrongObjectPtr<USeinSimulationContentManifest> TransientManifest;
 	TWeakObjectPtr<USeinARTSCoreSettings> ModifiedSettings;
 	TSoftObjectPtr<USeinSimulationContentManifest>

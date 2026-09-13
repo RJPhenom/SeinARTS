@@ -418,6 +418,18 @@ void USeinActorBridgeSubsystem::ReconcileBridgeAfterRestore()
 		}
 	});
 
+	// Refresh surviving actors too: their presentation may differ from the restored world.
+	// Snapshot weak references before calling Blueprint delegates, which can destroy actors.
+	TArray<TWeakObjectPtr<ASeinActor>> Actors;
+	EntityActorMap.GenerateValueArray(Actors);
+	for (const TWeakObjectPtr<ASeinActor>& ActorPtr : Actors)
+	{
+		if (ASeinActor* Actor = ActorPtr.Get())
+		{
+			if (auto* Bridge = Actor->FindComponentByClass<USeinEntityBridgeComponent>())
+				Bridge->RefreshPresentation();
+		}
+	}
 	UE_LOG(LogSeinBridge, Log,
 		TEXT("ReconcileBridgeAfterRestore: culled %d orphan actor(s), spawned %d missing actor(s), skipped %d abstract, %d entities had no class registered."),
 		NumOrphansCulled, NumActorsSpawned, NumAbstractSkipped, NumMissingClass);

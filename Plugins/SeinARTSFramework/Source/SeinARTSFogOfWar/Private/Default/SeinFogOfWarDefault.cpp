@@ -10,6 +10,7 @@
 
 #include "Default/SeinFogOfWarDefault.h"
 #include "Components/SeinVisionPayload.h"
+#include "Components/SeinConstructionPayload.h"
 #include "Components/SeinExtentsPayload.h"
 #include "Components/SeinFogVisibilityPayload.h"
 #include "Stamping/SeinStampShape.h"
@@ -679,6 +680,15 @@ void USeinFogOfWarDefault::TickStamps(UWorld* World)
 			if (!Entity || !Raw) return;
 			const FSeinVisionPayload* VData = static_cast<const FSeinVisionPayload*>(Raw);
 			if (!VData) return;
+
+			// Unfinished sites emit no vision. Exclude them before the cache
+			// fast path and live-source tracking so any old footprint is removed.
+			const FSeinConstructionPayload* Construction =
+				Sim->GetComponent<FSeinConstructionPayload>(Handle);
+			if (Construction && Construction->State != ESeinConstructionState::Complete)
+			{
+				return;
+			}
 
 			AliveSources.Add(Handle);
 			const FSeinPlayerID OwnerPlayer = Sim->GetEntityOwner(Handle);

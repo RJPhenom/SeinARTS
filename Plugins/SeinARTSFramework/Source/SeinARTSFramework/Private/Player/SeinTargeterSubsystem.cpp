@@ -6,6 +6,9 @@
  */
 
 #include "Player/SeinTargeterSubsystem.h"
+#include "Abilities/SeinAbility.h"
+#include "Abilities/SeinPlacementValidation.h"
+#include "Components/SeinAbilityPayload.h"
 #include "Player/SeinPlayerController.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Targeter/SeinTargeterPreview.h"
@@ -37,7 +40,7 @@ void USeinTargeterSubsystem::ReleaseModuleOwnedStateForModuleUnload()
 	// Teardown must not invoke Blueprint listeners while their owning modules
 	// may also be withdrawing.
 	OnStateChanged.Clear();
-	ResetToIdle();
+	ResetToIdle(ESeinPreviewEndReason::Unavailable, false);
 	CachedPC.Reset();
 }
 
@@ -65,15 +68,19 @@ void USeinTargeterSubsystem::Activate(USeinTargeterSpec* InSpec, FGameplayTag In
 		UE_LOG(LogSeinTargeter, Verbose,
 			TEXT("Activate replacing prior session (was capturing for %s, now %s)"),
 			*PendingAbilityTag.ToString(), *InAbilityTag.ToString());
-		ResetToIdle();
+		ResetToIdle(ESeinPreviewEndReason::Replaced);
+		// A teardown listener may already have started a newer session.
+		if (State != ESeinTargeterState::Idle) return;
 	}
 
+	const uint64 ActivationRevision = ++SessionRevision;
 	Spec = InSpec;
 	PendingAbilityTag = InAbilityTag;
 	PendingOwnerLeader = InOwnerLeader;
 	PendingAreaRadiusWorld = InAreaRadiusWorld;
 	CapturedPoints.Reset();
 	CapturedPoints.Reserve(InSpec->TargetCount);
+	State = ESeinTargeterState::WaitingForCapture;
 
 	// Spawn the preview actor. Spec gets first say (ResolvePreviewClass
 	// returns its PreviewClass override or its declared default); fall back
@@ -135,6 +142,8 @@ void USeinTargeterSubsystem::Activate(USeinTargeterSpec* InSpec, FGameplayTag In
 			Preview->SetFlags(RF_Transient);
 			Preview->InitializePreview(Spec, PendingAreaRadiusWorld);
 			Preview->FinishSpawning(SpawnTransform);
+			Preview->BeginPreview(BuildPreviewContext());
+			if (SessionRevision != ActivationRevision) return;
 		}
 		else
 		{
@@ -144,7 +153,8 @@ void USeinTargeterSubsystem::Activate(USeinTargeterSpec* InSpec, FGameplayTag In
 		}
 	}
 
-	SetState(ESeinTargeterState::WaitingForCapture);
+	OnStateChanged.Broadcast(State);
+	if (SessionRevision != ActivationRevision) return;
 	UE_LOG(LogSeinTargeter, Verbose, TEXT("Activated targeter for %s (TargetCount=%d, AreaRadius=%.1f)"),
 		*InAbilityTag.ToString(), Spec->TargetCount, InAreaRadiusWorld);
 }
@@ -175,7 +185,7 @@ void USeinTargeterSubsystem::OnConfirmPressed()
 		{
 			const FFixedVector CursorFixed = ToFixed(LastCursorWorld);
 			const FFixedVector AuxFixed;
-			const ESeinTargeterValidity Validity = Spec->ValidateClient(CursorFixed, AuxFixed);
+			const ESeinTargeterValidity Validity = EvaluateValidity(CursorFixed, AuxFixed);
 			if (Validity == ESeinTargeterValidity::Blocked)
 			{
 				UE_LOG(LogSeinTargeter, Verbose,
@@ -210,7 +220,7 @@ void USeinTargeterSubsystem::OnConfirmPressed()
 	{
 		const FFixedVector CursorFixed = ToFixed(LastCursorWorld);
 		const FFixedVector AuxFixed;
-		const ESeinTargeterValidity Validity = Spec->ValidateClient(CursorFixed, AuxFixed);
+		const ESeinTargeterValidity Validity = EvaluateValidity(CursorFixed, AuxFixed);
 		if (Validity == ESeinTargeterValidity::Blocked)
 		{
 			UE_LOG(LogSeinTargeter, Verbose,
@@ -227,6 +237,7 @@ void USeinTargeterSubsystem::OnConfirmReleased()
 {
 	if (State != ESeinTargeterState::Dragging) return;
 	if (!Spec) { ResetToIdle(); return; }
+	ComputeDragRotation(SnappedYawDegrees, SnappedStepIndex);
 
 	// Validate the drag-end placement at release time — anchor was passed at
 	// press, but a slow drag could now point at a Blocked direction (e.g.
@@ -237,7 +248,7 @@ void USeinTargeterSubsystem::OnConfirmReleased()
 		const FFixedVector AnchorFixed = ToFixed(DragAnchorWorld);
 		const FFixedVector CursorFixed = ToFixed(LastCursorWorld);
 		const ESeinTargeterValidity Validity = CombineValidity(
-			Spec->ValidateClient(AnchorFixed, CursorFixed),
+			EvaluateValidity(AnchorFixed, CursorFixed),
 			EvaluateCorridorFit(DragAnchorWorld, LastCursorWorld));
 		if (Validity == ESeinTargeterValidity::Blocked)
 		{
@@ -266,6 +277,7 @@ void USeinTargeterSubsystem::OnCancelInput()
 void USeinTargeterSubsystem::UpdateCursor(const FVector& CursorWorld)
 {
 	LastCursorWorld = CursorWorld;
+	if (Preview && !IsValid(Preview)) { ResetToIdle(ESeinPreviewEndReason::Unavailable); return; }
 	if (!Preview || !Spec) return;
 
 	// Drag state recomputes rotation each tick from anchor → cursor; preview
@@ -275,29 +287,7 @@ void USeinTargeterSubsystem::UpdateCursor(const FVector& CursorWorld)
 		ComputeDragRotation(SnappedYawDegrees, SnappedStepIndex);
 	}
 
-	// Validation context differs by state:
-	//   - WaitingForCapture: validate at the cursor position (anchor candidate)
-	//   - Dragging: validate at the locked anchor with cursor as drag end
-	//   - MultiClick with a planted vertex: validate the in-progress segment
-	//     (previous vertex → cursor), same shape as Dragging
-	const bool bSegmentInProgress = State == ESeinTargeterState::Dragging
-		|| bHasPolylineAnchor;
-	const FVector SegmentStart = State == ESeinTargeterState::Dragging
-		? DragAnchorWorld : PolylineAnchorWorld;
-	const FFixedVector PrimaryFixed = bSegmentInProgress
-		? ToFixed(SegmentStart) : ToFixed(CursorWorld);
-	const FFixedVector AuxFixed = bSegmentInProgress
-		? ToFixed(CursorWorld) : FFixedVector();
-	ESeinTargeterValidity Validity = Spec->ValidateClient(PrimaryFixed, AuxFixed);
-	if (bSegmentInProgress)
-	{
-		Validity = CombineValidity(
-			Validity, EvaluateCorridorFit(SegmentStart, CursorWorld));
-	}
-
-	const FVector AnchorForPreview = bSegmentInProgress
-		? SegmentStart : FVector::ZeroVector;
-	Preview->UpdatePreview(CursorWorld, AnchorForPreview, Validity, SnappedYawDegrees);
+	Preview->Present(BuildPreviewContext());
 }
 
 void USeinTargeterSubsystem::HandleMultiClickPress()
@@ -365,10 +355,7 @@ void USeinTargeterSubsystem::HandleMultiClickPress()
 	Point.Location = ToFixed(PolylineAnchorWorld);
 	Point.AuxLocation = ToFixed(LastCursorWorld);
 	CapturedPoints.Add(Point);
-	if (Preview)
-	{
-		Preview->NotifyPointCaptured(PolylineAnchorWorld, LastCursorWorld);
-	}
+	if (!NotifyCapture(PolylineAnchorWorld, LastCursorWorld)) return;
 	UE_LOG(LogSeinTargeter, Verbose,
 		TEXT("Captured polyline segment %d/%d for %s"),
 		CapturedPoints.Num(), Spec->TargetCount, *PendingAbilityTag.ToString());
@@ -388,10 +375,7 @@ void USeinTargeterSubsystem::CapturePoint()
 	Point.Location = ToFixed(LastCursorWorld);
 	// PointTargeterSpec leaves AuxLocation + RotationStep at defaults.
 	CapturedPoints.Add(Point);
-	if (Preview)
-	{
-		Preview->NotifyPointCaptured(LastCursorWorld, LastCursorWorld);
-	}
+	if (!NotifyCapture(LastCursorWorld, LastCursorWorld)) return;
 
 	UE_LOG(LogSeinTargeter, Verbose,
 		TEXT("Captured point %d/%d for %s at (%.1f, %.1f, %.1f)"),
@@ -419,10 +403,7 @@ void USeinTargeterSubsystem::CaptureDragPoint()
 	Point.RotationStep = SnappedStepIndex;
 	Point.YawDegrees = FFixedPoint::FromFloat(SnappedYawDegrees);
 	CapturedPoints.Add(Point);
-	if (Preview)
-	{
-		Preview->NotifyPointCaptured(DragAnchorWorld, LastCursorWorld);
-	}
+	if (!NotifyCapture(DragAnchorWorld, LastCursorWorld)) return;
 
 	UE_LOG(LogSeinTargeter, Verbose,
 		TEXT("Captured drag point %d/%d for %s at anchor (%.1f, %.1f, %.1f) yaw=%.1f° step=%d"),
@@ -505,6 +486,21 @@ bool USeinTargeterSubsystem::IsMultiClickLineSpec() const
 		&& LineSpec->CaptureMode == ESeinLineTargeterCapture::MultiClick;
 }
 
+ESeinTargeterValidity USeinTargeterSubsystem::EvaluateValidity(
+	const FFixedVector& Location, const FFixedVector& AuxLocation) const
+{
+	const ESeinTargeterValidity Authored = Spec->ValidateClient(Location, AuxLocation);
+	const auto* World = GetWorld() ? GetWorld()->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	const auto* Abilities = World ? World->GetComponent<FSeinAbilityPayload>(PendingOwnerLeader) : nullptr;
+	const auto* Ability = Abilities ? Abilities->FindAbilityByTag(*World, PendingAbilityTag) : nullptr;
+	if (!Ability || !Ability->bRequiresFreeFootprint) return Authored;
+	const auto ActorClass = SeinPlacementValidation::ResolveActorClass(*Ability);
+	const FFixedPoint Yaw = State == ESeinTargeterState::Dragging
+		? FFixedPoint::FromFloat(SnappedYawDegrees) : FFixedPoint::Zero;
+	return SeinPlacementValidation::IsValidClass(*World, ActorClass, Location, Yaw)
+		? Authored : ESeinTargeterValidity::Blocked;
+}
+
 ESeinTargeterValidity USeinTargeterSubsystem::CombineValidity(
 	ESeinTargeterValidity A, ESeinTargeterValidity B)
 {
@@ -584,7 +580,7 @@ void USeinTargeterSubsystem::Submit()
 	if (!PC)
 	{
 		UE_LOG(LogSeinTargeter, Warning, TEXT("Submit: no PC available, dropping captured points."));
-		ResetToIdle();
+		ResetToIdle(ESeinPreviewEndReason::Unavailable);
 		return;
 	}
 
@@ -597,7 +593,7 @@ void USeinTargeterSubsystem::Submit()
 	// the lockstep wire. PC method declared in SeinPlayerController.h.
 	PC->IssueTargetedAbility(PendingAbilityTag, PendingOwnerLeader, CapturedPoints);
 
-	ResetToIdle();
+	ResetToIdle(ESeinPreviewEndReason::Submitted);
 }
 
 ASeinPlayerController* USeinTargeterSubsystem::GetPlayerController() const
@@ -619,16 +615,16 @@ void USeinTargeterSubsystem::SetState(ESeinTargeterState NewState)
 {
 	if (State == NewState) return;
 	State = NewState;
-	OnStateChanged.Broadcast(NewState);
+	const uint64 Revision = SessionRevision;
+	UpdateCursor(LastCursorWorld);
+	if (Revision == SessionRevision) OnStateChanged.Broadcast(NewState);
 }
 
-void USeinTargeterSubsystem::ResetToIdle()
+void USeinTargeterSubsystem::ResetToIdle(ESeinPreviewEndReason Reason, bool bNotify)
 {
-	if (Preview)
-	{
-		Preview->Destroy();
-		Preview = nullptr;
-	}
+	++SessionRevision;
+	auto* PreviousPreview = Preview.Get();
+	Preview = nullptr;
 	Spec = nullptr;
 	PendingAbilityTag = FGameplayTag();
 	PendingOwnerLeader = FSeinEntityHandle::Invalid();
@@ -639,10 +635,62 @@ void USeinTargeterSubsystem::ResetToIdle()
 	SnappedStepIndex = 0;
 	PolylineAnchorWorld = FVector::ZeroVector;
 	bHasPolylineAnchor = false;
-	SetState(ESeinTargeterState::Idle);
+	State = ESeinTargeterState::Idle;
+	if (PreviousPreview)
+	{
+		PreviousPreview->EndPreview(Reason, bNotify);
+		PreviousPreview->Destroy();
+	}
+	if (bNotify && State == ESeinTargeterState::Idle) OnStateChanged.Broadcast(State);
 }
 
 FFixedVector USeinTargeterSubsystem::ToFixed(const FVector& World)
 {
 	return FFixedVector::FromVector(World);
+}
+
+FSeinTargeterPreviewContext USeinTargeterSubsystem::BuildPreviewContext() const
+{
+	FSeinTargeterPreviewContext Result;
+	Result.SourceEntity = PendingOwnerLeader;
+	Result.AbilityTag = PendingAbilityTag;
+	Result.CursorWorld = LastCursorWorld;
+	Result.bHasAnchor = State == ESeinTargeterState::Dragging || bHasPolylineAnchor;
+	Result.AnchorWorld = State == ESeinTargeterState::Dragging ? DragAnchorWorld : PolylineAnchorWorld;
+	Result.Phase = State == ESeinTargeterState::Dragging ? ESeinPreviewPhase::Dragging
+		: bHasPolylineAnchor ? ESeinPreviewPhase::Chaining : ESeinPreviewPhase::Waiting;
+	const FVector Target = Result.bHasAnchor ? Result.AnchorWorld : LastCursorWorld;
+	// Round through the command representation so every custom visual sees the captured pose.
+	const auto FixedTarget = ToFixed(Target);
+	const float Yaw = State == ESeinTargeterState::Dragging ? SnappedYawDegrees : 0;
+	Result.ResolvedTarget = FTransform(FRotator(0, FFixedPoint::FromFloat(Yaw).ToFloat(), 0), FixedTarget.ToVector());
+	Result.CapturedPoints = CapturedPoints;
+	Result.AreaRadius = PendingAreaRadiusWorld;
+	if (!Spec) return Result;
+	Result.TargetCount = Spec->TargetCount;
+	Result.Validity = EvaluateValidity(FixedTarget, Result.bHasAnchor ? ToFixed(LastCursorWorld) : FFixedVector());
+	if (Result.bHasAnchor) Result.Validity = CombineValidity(Result.Validity, EvaluateCorridorFit(Target, LastCursorWorld));
+	if (const auto* Line = Cast<USeinLineTargeterSpec>(Spec)) Result.CorridorWidth = Line->Width.ToFloat();
+	if (Result.Validity == ESeinTargeterValidity::Blocked)
+		Result.ValidityReason = NSLOCTEXT("SeinTargeter", "Blocked", "This target does not meet the targeting requirements.");
+	else if (Result.Validity == ESeinTargeterValidity::Warning)
+		Result.ValidityReason = NSLOCTEXT("SeinTargeter", "Warning", "This target is allowed with a targeting warning.");
+	const auto* World = GetWorld() ? GetWorld()->GetSubsystem<USeinWorldSubsystem>() : nullptr;
+	const auto* Abilities = World ? World->GetComponent<FSeinAbilityPayload>(PendingOwnerLeader) : nullptr;
+	const auto* Ability = Abilities ? Abilities->FindAbilityByTag(*World, PendingAbilityTag) : nullptr;
+	if (Ability) Result.ActorClass = SeinPlacementValidation::ResolveActorClass(*Ability);
+	return Result;
+}
+
+bool USeinTargeterSubsystem::NotifyCapture(const FVector& Start, const FVector& End)
+{
+	const uint64 Revision = SessionRevision;
+	if (Preview)
+	{
+		auto* CapturingPreview = Preview.Get();
+		CapturingPreview->Present(BuildPreviewContext());
+		if (Revision != SessionRevision) return false;
+		CapturingPreview->NotifyPointCaptured(Start, End);
+	}
+	return Revision == SessionRevision;
 }

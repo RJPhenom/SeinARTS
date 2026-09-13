@@ -53,6 +53,7 @@ void FSeinARTSMovementPlusModule::StartupModule()
 	SimulationContentRegistrationHandle.Reset();
 
 	FSeinSimulationContentContributorDescriptor ContentDescriptor;
+	ContentDescriptor.OwnerModule = TEXT("SeinARTSMovementPlus");
 	ContentDescriptor.StableContributorId = TEXT("seinarts.movementplus");
 	ContentDescriptor.ContributorRevision = 1;
 

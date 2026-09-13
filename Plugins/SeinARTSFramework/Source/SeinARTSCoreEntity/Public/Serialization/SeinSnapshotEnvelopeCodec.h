@@ -1,7 +1,7 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinSnapshotEnvelopeCodec.h
- * @brief   Bounded canonical framing for snapshot-v16 section payloads.
+ * @brief   Bounded canonical framing for snapshot-v19 section payloads.
  */
 
 #pragma once
@@ -31,7 +31,7 @@ enum class ESeinSnapshotSectionRole : uint8
 	Local = 4,
 };
 
-/** Payload byte contract. Snapshot v16 supports no compression. */
+/** Payload byte contract. Snapshot v19 supports no compression. */
 enum class ESeinSnapshotSectionCodec : uint8
 {
 	CanonicalBytes = 1,
@@ -64,7 +64,7 @@ struct SEINARTSCOREENTITY_API FSeinSnapshotEnvelopeSection
 	TArray<uint8> Payload;
 };
 
-/** Semantic input/output represented by the snapshot-v16 envelope. */
+/** Semantic input/output represented by the snapshot-v19 envelope. */
 struct SEINARTSCOREENTITY_API FSeinSnapshotEnvelope
 {
 	int64 SnapshotTick = 0;
@@ -109,8 +109,8 @@ class SEINARTSCOREENTITY_API FSeinSnapshotEnvelopeCodec
 public:
 	static constexpr uint32 WireFormatVersion = 1;
 	// Must track FSeinWorldSnapshot::CurrentVersion (the frozen-framing test
-	// asserts the pair). v18: ComponentData live-tuning overlay state.
-	static constexpr uint32 SnapshotSemanticsVersion = 18;
+	// asserts the pair). v19: production history and runtime queue policies.
+	static constexpr uint32 SnapshotSemanticsVersion = 19;
 	static constexpr int32 PrefixBytes = 120;
 	static constexpr uint32 MaxSections = 8192;
 	static constexpr uint32 MaxSectionIdBytes = 128;

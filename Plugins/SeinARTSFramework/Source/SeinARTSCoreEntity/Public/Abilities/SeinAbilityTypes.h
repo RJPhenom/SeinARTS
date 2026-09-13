@@ -74,8 +74,9 @@ enum class ESeinOutOfRangeBehavior : uint8
 {
 	/** Ability fails if out of range (grenade, snipe). */
 	Reject,
-	/** Queues the entity's ability marked Is Move Ability before retrying this
-	 *  command. The click-time preflight checks affordability without deducting;
+	/** Queues Sein Movement's Movement Ability before retrying this command.
+	 *  An empty or unavailable selection rejects the out-of-range command.
+	 *  The click-time preflight checks affordability without deducting;
 	 *  the follow-up reruns the ordinary gate and pays once if it can activate. */
 	AutoMoveThen
 };

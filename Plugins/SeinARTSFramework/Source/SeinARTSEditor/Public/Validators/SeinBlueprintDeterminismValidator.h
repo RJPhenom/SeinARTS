@@ -4,9 +4,10 @@
  * @brief   Shared base for determinism validators over SIM Blueprint graphs (movement modes,
  *          formations, ...). Walks the BP's function-call nodes — directly AND recursively through any
  *          macro instances — and flags any call that isn't whitelisted as deterministic: the target (or
- *          its owning class) carries the `SeinDeterministic` meta, OR its whole signature is
- *          deterministic-typed (with an explicit denylist for stateful-but-deterministic-signature calls
- *          like unseeded engine RNG). A non-deterministic node in a sim graph desyncs lockstep (and, for
+ *          its owning class) carries `SeinDeterministic` metadata, or it is an audited engine call.
+ *          Local Blueprint helpers are checked through their bodies, signatures, and local variables;
+ *          external and inherited Blueprint bodies are not implicitly certified. A non-deterministic
+ *          node in a sim graph can desync lockstep (and, for
  *          formations, splits preview from commit).
  *
  *          Findings are warnings by default; a subclass may opt into blocking errors (ShouldEscalateToError).

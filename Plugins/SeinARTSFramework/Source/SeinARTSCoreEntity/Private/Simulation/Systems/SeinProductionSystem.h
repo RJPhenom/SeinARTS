@@ -31,6 +31,7 @@ namespace SeinProductionLocal
 	struct FReadyCompletion
 	{
 		FSeinProductionQueueEntry Entry;
+		FSeinProductionCompletionClaim Claim;
 		FSeinPlayerID ProducerOwner;
 		FFixedTransform SpawnTransform;
 		bool bRallyToEntity = false;
@@ -119,7 +120,7 @@ namespace SeinProductionLocal
 	static bool DeductAndDetach(
 		USeinWorldSubsystem& World,
 		FSeinEntityHandle Producer,
-		const FReadyCompletion& Completion)
+		FReadyCompletion& Completion)
 	{
 		if (!USeinResourceBPFL::SeinDeduct(
 			&World, Completion.Entry.ResourcePayer,
@@ -139,6 +140,11 @@ namespace SeinProductionLocal
 			return false;
 		}
 
+		// Record the reserved completion before callbacks can enqueue another item.
+		// Failure removes this record when the original queue entry is restored.
+		Completion.Claim = World.BeginProductionCompletion(
+			Producer, Completion.ProducerOwner, Completion.Entry.ActorClass);
+		Production = World.GetComponentMutable<FSeinProductionPayload>(Producer);
 		Production->Queue.RemoveAt(0);
 		Production->CurrentBuildProgress = FFixedPoint::Zero;
 		Production->bStalledAtCompletion = false;
@@ -150,6 +156,7 @@ namespace SeinProductionLocal
 		FSeinEntityHandle Producer,
 		const FReadyCompletion& Completion)
 	{
+		World.RollBackProductionCompletion(Completion.Claim);
 		USeinResourceBPFL::SeinRefund(
 			&World, Completion.Entry.ResourcePayer,
 			Completion.Entry.AtCompletionCost);
@@ -214,20 +221,13 @@ namespace SeinProductionLocal
 			return;
 		}
 
-		FGameplayTag MoveAbilityTag;
-		if (const FSeinAbilityPayload* AbilityComponent =
-			World.GetComponent<FSeinAbilityPayload>(Produced))
-		{
-			if (const USeinAbility* MoveAbility =
-				AbilityComponent->FindMoveAbility(World))
-			{
-				MoveAbilityTag = MoveAbility->AbilityTag;
-			}
-		}
+		const USeinAbility* MoveAbility = World.ResolveDefaultMoveAbility(Produced);
+		const FGameplayTag MoveAbilityTag = MoveAbility ? MoveAbility->AbilityTag : FGameplayTag();
 		if (!MoveAbilityTag.IsValid()) return;
 
 		FSeinBrokerQueuedOrder Order;
 		Order.Context.AddTag(MoveAbilityTag);
+		Order.PredeterminedAbilityTag = MoveAbilityTag;
 		Order.TargetLocation = RallyLocation;
 		Order.bIsInternalPrefix = true;
 		const TArray<FSeinEntityHandle> Member = {Produced};
@@ -401,6 +401,7 @@ public:
 					// Replacement teardown already ran arbitrary callbacks. Retrying or
 					// refunding would duplicate irreversible authored side effects, so
 					// consume this detached completion without claiming research success.
+					World.RollBackProductionCompletion(Completion.Claim);
 					UE_LOG(LogSeinSim, Error,
 						TEXT("Production research on %s was invalidated by a RemoveEffectsWithTag callback; cost and queue entry remain consumed."),
 						*Producer.ToString());
@@ -442,7 +443,7 @@ public:
 	{
 		return FSeinSystemDescriptor::Stateless(
 			FName(TEXT("seinarts.core.production")),
-			1u,
+			2u,
 			ESeinTickPhase::AbilityExecution,
 			SeinSystemPriority::Production);
 	}

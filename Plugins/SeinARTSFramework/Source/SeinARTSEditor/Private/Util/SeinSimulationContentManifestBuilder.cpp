@@ -4,6 +4,7 @@
  */
 
 #include "Util/SeinSimulationContentManifestBuilder.h"
+#include "Util/SeinDefaultMoveAbilityAuthoring.h"
 
 #include "AssetRegistry/ARFilter.h"
 #include "AssetRegistry/AssetData.h"
@@ -171,7 +172,7 @@ namespace
 			|| !Path.GetAssetPath().IsValid())
 		{
 			OutError =
-				TEXT("Configure a top-level Simulation Content Manifest asset path in Project Settings, then generate the manifest.");
+				TEXT("Strict saved-evidence testing requires a recovery manifest. Use Rebuild Compatibility Data, or disable strict testing for ordinary Play.");
 			return false;
 		}
 
@@ -241,7 +242,7 @@ namespace
 					!= Recipe.RecipeClassPath)
 			{
 				OutError = FString::Printf(
-					TEXT("Registered canonical-state recipe '%s' cannot be resolved exactly as a USeinCanonicalStateRecipe class. Fix the provider, restart the editor, then regenerate the manifest."),
+					TEXT("Registered canonical-state recipe '%s' cannot be resolved exactly as a USeinCanonicalStateRecipe class. Fix the provider and restart the editor before cooking or validating strict saved evidence."),
 					*Recipe.RecipeClassPath);
 				return false;
 			}
@@ -823,7 +824,7 @@ namespace
 			if (Struct->Status != UDSS_UpToDate)
 			{
 				OutError = FString::Printf(
-					TEXT("SeinDeterministic struct '%s' is uncompiled or has compile errors. Compile and save it before regenerating the manifest."),
+					TEXT("SeinDeterministic struct '%s' is uncompiled or has compile errors. Compile and save it before cooking or validating strict saved evidence."),
 					*Struct->GetPathName());
 				return false;
 			}
@@ -892,41 +893,12 @@ namespace
 		return true;
 	}
 
-	bool BuildPackageRecord(
-		IAssetRegistry& AssetRegistry,
-		FName Package,
-		bool bValidateUnloadedAssets,
-		FSeinSimulationContentRecord& OutRecord,
-		FString& OutCanonicalPackageName,
-		FString& OutError)
+	bool ValidatePackageContracts(IAssetRegistry& AssetRegistry, FName Package,
+		bool bValidateUnloadedAssets, FString& OutError)
 	{
-		OutRecord = {};
-		OutCanonicalPackageName.Reset();
-
-		FString CorrectCasePackageName;
-		if (!AssetRegistry.DoesPackageExistOnDisk(
-			Package,
-			&CorrectCasePackageName))
-		{
-			OutError = FString::Printf(
-				TEXT("Simulation-content package '%s' is unsaved or missing."),
-				*Package.ToString());
-			return false;
-		}
-
-		UPackage* LoadedPackage =
-			FindPackage(nullptr, *CorrectCasePackageName);
-		if (LoadedPackage && LoadedPackage->IsDirty())
-		{
-			OutError = FString::Printf(
-				TEXT("Simulation-content package '%s' has unsaved changes. Compile and save all inputs before generating or starting PIE."),
-				*CorrectCasePackageName);
-			return false;
-		}
-
 		TArray<FAssetData> PackageAssets;
 		AssetRegistry.GetAssetsByPackageName(
-			FName(*CorrectCasePackageName),
+			Package,
 			PackageAssets,
 			false,
 			false);
@@ -945,11 +917,18 @@ namespace
 				if (!Blueprint || !Blueprint->IsUpToDate())
 				{
 					OutError = FString::Printf(
-						TEXT("Blueprint '%s' is uncompiled or has compile errors. Compile and save it before regenerating the manifest."),
+						TEXT("Blueprint '%s' is uncompiled or has compile errors. Compile and save it before cooking or validating strict saved evidence."),
 						*Asset.GetObjectPathString());
 					return false;
 				}
 
+				FText SelectionError;
+				if (!SeinDefaultMoveAbilityAuthoring::ValidateEntity(*Blueprint, SelectionError))
+				{
+					OutError = FString::Printf(TEXT("Blueprint '%s': %s"),
+						*Asset.GetObjectPathString(), *SelectionError.ToString());
+					return false;
+				}
 				TArray<FSeinAbilityContinuationFinding> Findings;
 				FSeinAbilityContinuationAnalysis::Analyze(
 					*Blueprint,
@@ -995,12 +974,50 @@ namespace
 				if (!Struct || Struct->Status != UDSS_UpToDate)
 				{
 					OutError = FString::Printf(
-						TEXT("User Defined Struct '%s' is uncompiled or has compile errors. Compile and save it before regenerating the manifest."),
+						TEXT("User Defined Struct '%s' is uncompiled or has compile errors. Compile and save it before cooking or validating strict saved evidence."),
 						*Asset.GetObjectPathString());
 					return false;
 				}
 			}
 		}
+
+		return true;
+	}
+
+	bool BuildPackageRecord(
+		IAssetRegistry& AssetRegistry,
+		FName Package,
+		bool bValidateUnloadedAssets,
+		FSeinSimulationContentRecord& OutRecord,
+		FString& OutCanonicalPackageName,
+		FString& OutError)
+	{
+		OutRecord = {};
+		OutCanonicalPackageName.Reset();
+
+		FString CorrectCasePackageName;
+		if (!AssetRegistry.DoesPackageExistOnDisk(
+			Package,
+			&CorrectCasePackageName))
+		{
+			OutError = FString::Printf(
+				TEXT("Simulation-content package '%s' is unsaved or missing."),
+				*Package.ToString());
+			return false;
+		}
+
+		UPackage* LoadedPackage =
+			FindPackage(nullptr, *CorrectCasePackageName);
+		if (LoadedPackage && LoadedPackage->IsDirty())
+		{
+			OutError = FString::Printf(
+				TEXT("Simulation-content package '%s' has unsaved changes. Compile and save this source asset before cooking or validating strict saved evidence."),
+				*CorrectCasePackageName);
+			return false;
+		}
+
+		if (!ValidatePackageContracts(AssetRegistry, FName(*CorrectCasePackageName),
+			bValidateUnloadedAssets, OutError)) return false;
 
 		LoadedPackage = FindPackage(
 			nullptr,
@@ -1008,7 +1025,7 @@ namespace
 		if (LoadedPackage && LoadedPackage->IsDirty())
 		{
 			OutError = FString::Printf(
-				TEXT("Simulation-content package '%s' became dirty while validating. Save it before regenerating the manifest."),
+				TEXT("Simulation-content package '%s' became dirty while validating. Save it before cooking or validating strict saved evidence."),
 				*CorrectCasePackageName);
 			return false;
 		}
@@ -1019,7 +1036,7 @@ namespace
 		if (!PackageData.IsSet())
 		{
 			OutError = FString::Printf(
-				TEXT("Asset Registry has no saved package data for '%s'. Rescan or save the package, then regenerate."),
+				TEXT("Asset Registry has no saved package data for '%s'. Rescan or save the package before cooking or validating strict saved evidence."),
 				*CorrectCasePackageName);
 			return false;
 		}
@@ -1028,7 +1045,7 @@ namespace
 		if (PackageSavedHash.IsZero())
 		{
 			OutError = FString::Printf(
-				TEXT("Package '%s' has no PackageSavedHash. Resave it with Unreal Engine 5.8 before regenerating the manifest."),
+				TEXT("Package '%s' has no PackageSavedHash. Resave it with Unreal Engine 5.8 before cooking or validating strict saved evidence."),
 				*CorrectCasePackageName);
 			return false;
 		}
@@ -1068,8 +1085,9 @@ namespace
 
 	bool BuildExpectedProfile(
 		FExpectedManifestProfile& OutExpected,
-		FString& OutError)
+		FString& OutError, const FSeinSimulationContentRegistrySnapshot* CookSnapshot = nullptr)
 	{
+		const bool bForCook = CookSnapshot != nullptr;
 		OutExpected = {};
 		OutError.Reset();
 		check(IsInGameThread());
@@ -1086,10 +1104,10 @@ namespace
 				TEXT("SeinARTS Core Settings are unavailable.");
 			return false;
 		}
-		if (!ResolveManifestIdentity(
+		if ((!bForCook && !ResolveManifestIdentity(
 			*Settings,
 			OutExpected.Manifest,
-			OutError)
+			OutError))
 			|| !ValidateConfiguredRecipeBinding(
 				*Settings,
 				OutError))
@@ -1117,7 +1135,8 @@ namespace
 			TEXT("Asset Registry scan is complete."));
 
 		FSeinSimulationContentRegistrySnapshot Snapshot;
-		if (!FSeinSimulationContentRegistry::CaptureSnapshot(
+		if (CookSnapshot) Snapshot = *CookSnapshot;
+		else if (!FSeinSimulationContentRegistry::CaptureSnapshot(
 			Snapshot,
 			OutError))
 		{
@@ -1220,7 +1239,7 @@ namespace
 			TEXT("Simulation-content dependency closure resolved %d package(s) across %d registered authored-content mount(s)."),
 			Packages.Num(),
 			AllowedContentMounts.Num());
-		if (Packages.IsEmpty())
+		if (Packages.IsEmpty() && !bForCook)
 		{
 			OutError =
 				TEXT("Simulation-content discovery produced no saved packages.");
@@ -1441,6 +1460,63 @@ bool FSeinSimulationContentManifestBuilder::
 
 	OutObjectPath = FString::Printf(
 		TEXT("%s.%s"), *PackageName, *AssetName);
+	return true;
+}
+
+bool FSeinSimulationContentManifestBuilder::ValidateCookSourceContracts(
+	TConstArrayView<FName> Packages, FString& OutError)
+{
+	for (FName Package : Packages)
+		if (!ValidatePackageContracts(IAssetRegistry::GetChecked(), Package, true, OutError)) return false;
+	return true;
+}
+
+bool FSeinSimulationContentManifestBuilder::CollectCookSourcePackages(
+	const FSeinSimulationContentRegistrySnapshot& Snapshot,
+	TConstArrayView<FName> InputPackages,
+	TConstArrayView<FName> CookedPackages,
+	TArray<FName>& OutPackages, FString& OutError)
+{
+	OutPackages.Reset();
+	TSet<FString> Mounts;
+	if (!BuildAllowedContentMounts(InputPackages, Snapshot, Mounts, OutError)) return false;
+	IAssetRegistry& Registry = IAssetRegistry::GetChecked();
+	TSet<FName> Packages;
+	for (FName Package : InputPackages) Packages.Add(Package);
+	TArray<FName> Queue = Packages.Array();
+	for (FName Package : CookedPackages)
+	{
+		FString Mount;
+		if (!TryGetPackageMount(Package, Mount) || Mount == TEXT("/Engine") || Mount == TEXT("/Script")) continue;
+		TArray<FAssetData> Assets;
+		Registry.GetAssetsByPackageName(Package, Assets, true, false);
+		if (Assets.ContainsByPredicate([](const FAssetData& Asset)
+			{ return Asset.AssetClassPath == UWorld::StaticClass()->GetClassPathName(); }))
+		{
+			Mounts.Add(Mount);
+			if (!Packages.Contains(Package)) { Packages.Add(Package); Queue.Add(Package); }
+		}
+	}
+	if (!BuildDependencyClosure(Registry, NAME_None, Mounts, Queue, Packages, OutError)) return false;
+	OutPackages = Packages.Array();
+	OutPackages.Sort(FNameLexicalLess());
+	return true;
+}
+
+bool FSeinSimulationContentManifestBuilder::BuildCookInputProfile(
+	const FSeinSimulationContentRegistrySnapshot& Snapshot,
+	FSeinSimulationContentManifestProfile& OutProfile,
+	FSeinSimulationContentManifestBuildResult& OutResult, FString& OutError)
+{
+	OutProfile = {};
+	OutResult = {};
+	FExpectedManifestProfile Expected;
+	if (!BuildExpectedProfile(Expected, OutError, &Snapshot)) return false;
+	OutProfile = MoveTemp(Expected.Profile);
+	OutResult.ContentPackages = MoveTemp(Expected.ContentPackages);
+	OutResult.RootDigest = OutProfile.RootDigest;
+	OutResult.ContributorCount = OutProfile.Contributors.Num();
+	OutResult.RecordCount = OutProfile.Records.Num();
 	return true;
 }
 

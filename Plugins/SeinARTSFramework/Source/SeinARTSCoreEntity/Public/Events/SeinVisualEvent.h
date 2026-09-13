@@ -12,6 +12,7 @@
 #include "Types/Vector.h"
 #include "Core/SeinEntityHandle.h"
 #include "Core/SeinPlayerID.h"
+#include "Components/SeinConstructionTypes.h"
 #include "SeinVisualEvent.generated.h"
 
 /**
@@ -34,11 +35,7 @@ enum class ESeinVisualEventType : uint8
 	ProductionStarted,
 	ProductionCompleted,
 	ProductionStalled,
-	/** Entity entered or exited under-construction state. `Value` = 1.0 means
-	 *  entering construction (placement visual should appear, main mesh hidden);
-	 *  `Value` = 0.0 means leaving construction (placement visual destroyed,
-	 *  main mesh restored). Routed to the entity's USeinConstructionRenderComponent
-	 *  on the bridged actor. */
+	/** Construction lifecycle or stage changed. Old/new fields preserve each ordered transition; Value retains the unfinished flag. */
 	ConstructionStateChanged,
 	ResourceChanged,
 	SquadMemberDied,
@@ -116,6 +113,22 @@ struct SEINARTSCOREENTITY_API FSeinVisualEvent
 	/** Player who owns or triggered this event */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|VisualEvent")
 	FSeinPlayerID PlayerID;
+
+	/** Construction phase before this notification. Stage-only changes leave the phase unchanged. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|VisualEvent")
+	ESeinConstructionState OldConstructionState = ESeinConstructionState::Complete;
+
+	/** Construction phase after this notification. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|VisualEvent")
+	ESeinConstructionState NewConstructionState = ESeinConstructionState::Complete;
+
+	/** Designer milestone before this notification. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|VisualEvent")
+	FGameplayTag OldConstructionStage;
+
+	/** Designer milestone after this notification. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|VisualEvent")
+	FGameplayTag NewConstructionStage;
 
 	/**
 	 * Optional reason-tag for CommandRejected events — a gameplay tag under

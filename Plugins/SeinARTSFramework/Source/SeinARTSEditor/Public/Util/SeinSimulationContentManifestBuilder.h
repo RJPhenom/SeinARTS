@@ -8,6 +8,8 @@
 
 #include "CoreMinimal.h"
 #include "Engine/EngineTypes.h"
+#include "Serialization/SeinSimulationContentManifest.h"
+#include "Serialization/SeinSimulationContentRegistry.h"
 
 /** Result shared by the settings UI and editor/cook admission gates. */
 struct SEINARTSEDITOR_API FSeinSimulationContentManifestBuildResult
@@ -31,6 +33,22 @@ struct SEINARTSEDITOR_API FSeinSimulationContentManifestBuildResult
 class SEINARTSEDITOR_API FSeinSimulationContentManifestBuilder
 {
 public:
+	/** Discover and validate saved simulation inputs for cook without creating
+	 *  a source manifest asset or changing project settings. */
+	static bool BuildCookInputProfile(
+		const FSeinSimulationContentRegistrySnapshot& Snapshot,
+		FSeinSimulationContentManifestProfile& OutProfile,
+		FSeinSimulationContentManifestBuildResult& OutResult,
+		FString& OutError);
+	/** Add actual cooked map roots and their source dependencies, excluding
+	 *  engine/platform-generated presentation packages. Does not load assets. */
+	static bool CollectCookSourcePackages(
+		const FSeinSimulationContentRegistrySnapshot& Snapshot,
+		TConstArrayView<FName> InputPackages,
+		TConstArrayView<FName> CookedPackages,
+		TArray<FName>& OutPackages, FString& OutError);
+	/** Validate compiled source contracts after cook without interpreting cooker dirtiness as author edits. */
+	static bool ValidateCookSourceContracts(TConstArrayView<FName> Packages, FString& OutError);
 	/** Resolve a canonical project-owned manifest object path from a save folder. */
 	static bool BuildProjectManifestObjectPath(
 		const FDirectoryPath& SaveFolder,

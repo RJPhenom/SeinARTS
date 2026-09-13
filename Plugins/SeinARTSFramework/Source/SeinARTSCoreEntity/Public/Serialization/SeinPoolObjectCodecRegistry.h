@@ -199,8 +199,9 @@ public:
 		FSeinPoolObjectCodecRegistrationHandle& Handle);
 
 	/**
-	 * Freeze providers and locally admit Blueprint classes found only in the
-	 * selected, already-validated simulation-content profile.
+	 * Freeze providers and Blueprint class schemas once per session. Saved
+	 * profiles bound admission to their records; editor-session profiles use
+	 * current derived classes, including compiled unsaved Blueprints.
 	 */
 	static FSeinPoolObjectCodecManifest CaptureManifest(
 		const FSeinSimulationContentManifestProfile& ContentProfile,

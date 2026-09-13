@@ -79,6 +79,7 @@ void FSeinARTSFrameworkModule::StartupModule()
 #endif
 
 	FSeinSimulationContentContributorDescriptor ContentDescriptor;
+	ContentDescriptor.OwnerModule = TEXT("SeinARTSFramework");
 	ContentDescriptor.StableContributorId = TEXT("seinarts.framework");
 	ContentDescriptor.ContributorRevision = 1;
 	ContentDescriptor.DiscoveryRoots = {

@@ -3,7 +3,7 @@
  * @file         SeinDebugLegend.h
  * @author       RJ Macklem
  * @created      05 Sep 2026
- * @latest       05 Sep 2026
+ * @latest       07 Sep 2026
  * @brief        Shared visibility and per-view layout for debug legend panels.
  *
  * @disclaimer   This code was generated in whole or in part with the assistance
@@ -19,10 +19,18 @@
 #include "Engine/Engine.h"
 #include "SceneView.h"
 #include "Settings/PluginSettings.h"
+#include <initializer_list>
 
 namespace UE::SeinARTS::DebugLegend
 {
 	enum class EPanel : uint8 { Navigation, Steering, Extents, FogOfWar };
+
+	/** One colored phrase in a legend row. */
+	struct FTextRun
+	{
+		const TCHAR* Value;
+		FLinearColor Color;
+	};
 
 	/** Stateless layout: callback order and other worlds cannot move this view's panels. */
 	class FPanel
@@ -56,13 +64,27 @@ namespace UE::SeinARTS::DebugLegend
 		}
 
 		bool IsVisible() const { return bVisible; }
-		void Text(float RowOffset, const FString& Value, const FLinearColor& Color) const
+		void Text(float RowOffset, const FString& Value, const FLinearColor& Color, float ColumnOffset = 0) const
 		{
 			if (!bVisible) return;
-			FCanvasTextItem Item(FVector2D(X, Y + RowOffset), FText::FromString(Value), GEngine->GetSmallFont(), Color);
+			FCanvasTextItem Item(FVector2D(X + ColumnOffset, Y + RowOffset), FText::FromString(Value), GEngine->GetSmallFont(), Color);
 			Canvas->Canvas->PushDepthSortKey(-101);
 			Canvas->DrawItem(Item);
 			Canvas->Canvas->PopDepthSortKey();
+		}
+
+		/** Place colored phrases consecutively using the rendered font's widths. */
+		void TextRuns(float RowOffset, std::initializer_list<FTextRun> Runs) const
+		{
+			if (!bVisible) return;
+			float ColumnOffset = 0;
+			for (const FTextRun& Run : Runs)
+			{
+				Text(RowOffset, Run.Value, Run.Color, ColumnOffset);
+				float Width = 0, Height = 0;
+				Canvas->StrLen(GEngine->GetSmallFont(), FStringView(Run.Value), Width, Height);
+				ColumnOffset += Width;
+			}
 		}
 
 	private:

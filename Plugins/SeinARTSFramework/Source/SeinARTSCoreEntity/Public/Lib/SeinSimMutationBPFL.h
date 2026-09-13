@@ -97,7 +97,7 @@ public:
 	 *  zero/false whenever the call returns false.
 	 *  @return false when the entity, component, or fixed-point field cannot be
 	 *  resolved, or the caller lacks mutation authorization. */
-	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Component", meta = (WorldContext = "WorldContextObject", DisplayName = "Apply Field Delta"))
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Component", meta = (WorldContext = "WorldContextObject", DisplayName = "Apply Field Delta", SeinDeterministic))
 	static bool SeinApplyFieldDelta(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle, UScriptStruct* StructType, FName FieldName, FFixedPoint Delta, bool bClampMin, FFixedPoint MinValue, bool bClampMax, FFixedPoint MaxValue, FFixedPoint& NewValue, bool& bChanged, bool& bAtMin, bool& bAtMax);
 
 	// Field-level setters

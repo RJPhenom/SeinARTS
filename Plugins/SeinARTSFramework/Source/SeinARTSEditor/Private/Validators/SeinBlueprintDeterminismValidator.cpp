@@ -15,8 +15,10 @@
 
 #include "Engine/Blueprint.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_FunctionEntry.h"
 #include "K2Node_MacroInstance.h"
 #include "EdGraph/EdGraph.h"
+#include "EdGraphSchema_K2.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -62,6 +64,19 @@ namespace
 		for (TFieldIterator<FProperty> It(Func); It && (It->PropertyFlags & CPF_Parm); ++It)
 		{
 			if (!IsPropertyTypeDeterministic(*It)) return false;
+		}
+		return true;
+	}
+
+	/** Local helpers use the same value/container rules as Blueprint-authored state. */
+	bool IsLocalFunctionSignatureDeterministic(const UFunction* Func)
+	{
+		const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
+		for (TFieldIterator<FProperty> It(Func); It && (It->PropertyFlags & CPF_Parm); ++It)
+		{
+			FEdGraphPinType Type;
+			if (!Schema->ConvertPropertyToPinType(*It, Type)
+				|| !SeinDeterminism::IsPinTypeDeterministic(Type)) return false;
 		}
 		return true;
 	}
@@ -112,12 +127,26 @@ namespace
 	 *  UKismetMathLibrary (excluding its unseeded random calls) and the audited
 	 *  UKismetSystemLibrary debug-sink set above. Everything else fails closed.
 	 *  Unresolved targets are left to the Blueprint compiler. */
-	bool IsCallNonDeterministic(const UFunction* Func)
+	bool IsCallNonDeterministic(const UFunction* Func, const UBlueprint* Blueprint)
 	{
 		if (!Func) return false;
 		if (Func->HasMetaData(SeinPresentationOnlyMeta)) return true;
 		const UClass* Owner = Func->GetOwnerClass();
 		if (Owner && Owner->HasMetaData(SeinPresentationOnlyMeta)) return true;
+		// Only accept local helpers whose bodies are included in this asset's graph walk.
+		// Generated and skeleton functions both occur during editor validation. External
+		// and inherited Blueprint implementations are not covered by this walk.
+		if (Blueprint && !Func->HasAnyFunctionFlags(FUNC_Native)
+			&& (Owner == Blueprint->GeneratedClass || Owner == Blueprint->SkeletonGeneratedClass))
+		{
+			for (const UEdGraph* Graph : Blueprint->FunctionGraphs)
+			{
+				if (Graph && Graph->GetFName() == Func->GetFName())
+				{
+					return !IsLocalFunctionSignatureDeterministic(Func);
+				}
+			}
+		}
 		if (Func->HasMetaData(SeinDeterministicMeta)) return false;
 		if (Owner && Owner->HasMetaData(SeinDeterministicMeta)) return false;
 		if (IsAuditedDebugSinkCall(Func)) return false;
@@ -201,7 +230,7 @@ EDataValidationResult USeinBlueprintDeterminismValidator::ValidateLoadedAsset_Im
 	{
 		if (!Node) continue;
 		const UFunction* Func = Node->GetTargetFunction();
-		if (!IsCallNonDeterministic(Func)) continue;
+		if (!IsCallNonDeterministic(Func, BP)) continue;
 
 		bAnyFlagged = true;
 		const FString FuncName  = Func ? Func->GetName() : TEXT("<unresolved>");
@@ -215,6 +244,25 @@ EDataValidationResult USeinBlueprintDeterminismValidator::ValidateLoadedAsset_Im
 
 		if (bAsError) { AssetFails(InAsset, Msg); }
 		else          { AssetWarning(InAsset, Msg); }
+	}
+
+	// Helpers also need deterministic local storage, even when all their calls are safe.
+	TArray<UK2Node_FunctionEntry*> FunctionEntries;
+	FBlueprintEditorUtils::GetAllNodesOfClass<UK2Node_FunctionEntry>(BP, FunctionEntries);
+	for (const UK2Node_FunctionEntry* Entry : FunctionEntries)
+	{
+		if (!Entry) continue;
+		for (const FBPVariableDescription& Var : Entry->LocalVariables)
+		{
+			if (SeinDeterminism::IsPinTypeDeterministic(Var.VarType)) continue;
+			bAnyFlagged = true;
+			const FText Msg = FText::Format(
+				LOCTEXT("NonDeterministicLocal",
+					"{0} function '{1}' local variable '{2}' has a non-deterministic type. Use fixed-point types for simulation values."),
+				KindLabel, FText::FromName(Entry->GetGraph()->GetFName()), FText::FromName(Var.VarName));
+			if (bAsError) { AssetFails(InAsset, Msg); }
+			else          { AssetWarning(InAsset, Msg); }
+		}
 	}
 
 	// Member variables: the call walk catches non-deterministic CALLS, not non-deterministic STATE.

@@ -24,6 +24,13 @@ class SEINARTSFOGOFWAR_API USeinVisionComponent : public USeinEntityComponent
 {
 	GENERATED_BODY()
 public:
+	USeinVisionComponent()
+	{
+		// Start newly authored sight sources with one usable stamp. Keep the
+		// runtime payload default empty; baking copies the authored array as-is.
+		Vision.VisionStamps.AddDefaulted();
+	}
+
 	UPROPERTY(EditAnywhere, Category = "SeinARTS", meta = (ShowOnlyInnerProperties))
 	FSeinVisionPayload Vision;
 

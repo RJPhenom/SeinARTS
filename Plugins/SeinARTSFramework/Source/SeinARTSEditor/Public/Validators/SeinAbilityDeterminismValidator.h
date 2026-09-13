@@ -28,6 +28,7 @@ class USeinAbilityDeterminismValidator
 	GENERATED_BODY()
 
 protected:
+	virtual EDataValidationResult ValidateLoadedAsset_Implementation(const FAssetData& AssetData, UObject* Asset, FDataValidationContext& Context) override;
 	virtual bool IsTargetBlueprint(UBlueprint* Blueprint) const override;
 	virtual FText GetAssetKindLabel() const override;
 	virtual FText GetToolkitHintText() const override;

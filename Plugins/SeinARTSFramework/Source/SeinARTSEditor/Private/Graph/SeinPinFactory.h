@@ -1,12 +1,10 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinPinFactory.h
- * @brief   Graph pin factory that assigns custom colors to fixed-point USTRUCT pins.
+ * @brief   Graph pin factory that colors fixed vector, rotator, and transform pins.
  *
- * Unreal uses a single "struct" color for all USTRUCT pins by default, so FFixedPoint /
- * FFixedVector / FFixedRotator / FFixedTransform all render as dark blue. This factory
- * inspects the pin's SubCategoryObject and returns a custom SGraphPin subclass that
- * overrides GetPinColor() so our fixed-point types visually match their UE counterparts.
+ * Fixed vector, rotator, and transform pins use their UE counterparts' colors.
+ * FFixedPoint scalar pins retain Unreal's default struct color.
  */
 
 #pragma once

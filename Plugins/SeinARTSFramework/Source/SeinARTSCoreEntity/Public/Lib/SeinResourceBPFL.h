@@ -94,7 +94,7 @@ public:
 	 *  FFixedPoint::MaxValue. Invalid tags or negative amounts reject the entire
 	 *  grant without changing balances. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Economy",
-		meta = (WorldContext = "WorldContextObject", DisplayName = "Grant Income"))
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Grant Income", SeinDeterministic))
 	static void SeinGrantIncome(const UObject* WorldContextObject, FSeinPlayerID PlayerID, const FSeinResourceCost& Amount);
 
 	/** Transfer resources from one player to another. Returns false on invalid

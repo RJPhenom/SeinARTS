@@ -2,6 +2,7 @@
 #include "Components/ActorTestSpawner.h"
 
 #include "Components/SeinAbilityPayload.h"
+#include "Components/SeinMovementPayload.h"
 #include "Brokers/SeinDefaultCommandBrokerResolver.h"
 #include "Containers/Ticker.h"
 #include "Simulation/SeinTestSimContext.h"
@@ -89,7 +90,7 @@ namespace SeinPayerContinuityTestPrivate
 	void ExpectAbilityHashDiagnostic(TTestRunner& TestRunner)
 	{
 		TestRunner.AddExpectedError(
-			TEXT("Component 'SeinAbilityComponent' has field(s) excluded from the legacy local state fingerprint"),
+			TEXT("Component 'SeinAbilityPayload' has field(s) excluded from the legacy local state fingerprint"),
 			EAutomationExpectedErrorFlags::Contains, 1, false);
 	}
 
@@ -173,7 +174,10 @@ namespace UE::SeinARTSTests
 				SeinARTSTags::Command_Context_AbilityTriggered);
 			if (MoveAbility && PaidAbility)
 			{
-				MoveAbility->bIsMoveAbility = true;
+				MoveAbility->TargetType = ESeinAbilityTargetType::Point;
+				FSeinMovementPayload Movement;
+				Movement.DefaultMoveAbility = MoveAbility->GetClass();
+				World->AddComponent(Entity, Movement);
 				PaidAbility->MaxRange = FFixedPoint::FromInt(1);
 				PaidAbility->OutOfRangeBehavior =
 					ESeinOutOfRangeBehavior::AutoMoveThen;

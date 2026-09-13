@@ -1,161 +1,71 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- *
- * @file:    SeinConstructionRenderComponent.h
- * @brief:   Render-side visual response to construction state changes. Pure
- *           UE-native UActorComponent (NOT a USeinActorComponent subclass) —
- *           keeps the "UE owns render, SeinARTS owns sim" boundary clean.
- *
- *           Designer adds this AC to a building BP, configures visual config
- *           (mesh swap kind, decal, decal size). The sim payload
- *           `FSeinConstructionPayload` (BuildTime / Progress / CompletionEffect)
- *           is authored separately in the entity bridge's `ComponentData`
- *           array — sim and render are two co-equal authoring surfaces.
- *
- *           At BeginPlay, subscribes to the owning actor's
- *           USeinEntityBridgeComponent::OnVisualEvent delegate. When a
- *           ConstructionStateChanged event arrives, enters/exits the
- *           construction visual state — hides main meshes + spawns the
- *           configured placement visual (+ optional ground decal); restores
- *           on construction-complete.
- *
- *           Presentation counterpart to the deterministic
- *           FSeinConstructionPayload payload.
+ * @file         SeinConstructionRenderComponent.h
+ * @author       RJ Macklem
+ * @created      11 Sep 2026
+ * @latest       11 Sep 2026
+ * @brief        Optional construction adapter for explicit entity presentation groups.
+ * @disclaimer   This code was generated in part with the assistance of an AI language model.
  */
-
 #pragma once
-
-#include "CoreMinimal.h"
-#include "Components/ActorComponent.h"
-#include "Engine/EngineTypes.h"
+#include "Components/ActorComponents/SeinEntityPresentationComponent.h"
+#include "Components/SeinConstructionTypes.h"
 #include "SeinConstructionRenderComponent.generated.h"
-
-class USeinEntityBridgeComponent;
 class UStaticMesh;
 class USkeletalMesh;
 class UMaterialInterface;
-class UStaticMeshComponent;
-class USkeletalMeshComponent;
-class UMeshComponent;
-class UDecalComponent;
-struct FSeinVisualEvent;
 
-/**
- * Which kind of placeholder visual is shown while under construction. Only
- * the matching slot's mesh field is editable in the details panel
- * (EditConditionHides hides the others outright).
- */
-UENUM(BlueprintType)
-enum class ESeinConstructionPlacementVisualType : uint8
-{
-	/** No placeholder — main mesh is hidden but nothing replaces it.
-	 *  Useful for "ground stamp / decal only" minimal previews. */
-	None,
+/** Legacy asset representation, retained only for editor migration into explicit groups. */
+UENUM()
+enum class ESeinConstructionPlacementVisualType : uint8 { None, StaticMesh, SkeletalMesh, BlueprintActor };
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSeinConstructionStateChanged, ESeinConstructionState, OldState, ESeinConstructionState, NewState);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSeinConstructionStageChanged, FGameplayTag, OldStage, FGameplayTag, NewStage);
 
-	/** Static mesh marker — drag a UStaticMesh asset into the slot. */
-	StaticMesh,
-
-	/** Skeletal mesh — animated under-construction model (anim BPs can listen
-	 *  to progress and drive a build-up sequence). */
-	SkeletalMesh,
-
-	/** Spawn a designer-authored AActor blueprint at the entity's pose.
-	 *  Pick this for fancy under-construction visuals — animated meshes,
-	 *  particles, custom BP logic. */
-	BlueprintActor
-};
-
-UCLASS(ClassGroup = (SeinARTS),
-	meta = (BlueprintSpawnableComponent, DisplayName = "SeinARTS Construction Renderer"))
-class SEINARTSCOREENTITY_API USeinConstructionRenderComponent : public UActorComponent
+/** Optional mapping from construction lifecycle to explicit visual groups. Never discovers or hides all meshes. */
+UCLASS(Blueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent, DisplayName = "SeinARTS Construction Renderer"))
+class SEINARTSCOREENTITY_API USeinConstructionRenderComponent : public USeinEntityPresentationComponent
 {
 	GENERATED_BODY()
-
 public:
 	USeinConstructionRenderComponent();
-
-	// ─── Visual config (render-side authoring) ───
-
-	/** Which kind of placeholder visual to show while under construction.
-	 *  Selecting a type reveals its dedicated slot in the panel below. */
+	/** Group shown when construction is complete or the entity has no construction data. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
+	FName FinishedGroup = TEXT("Finished");
+	/** Group shown while a construction job is unfinished. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
+	FName ConstructionGroup = TEXT("Construction");
+	/** Ordered lifecycle transitions. Initial binding synchronizes silently; completion fires before its group hides. */
+	UPROPERTY(BlueprintAssignable, Category = "SeinARTS")
+	FSeinConstructionStateChanged OnConstructionStateChanged;
+	/** Ordered designer-stage transitions. Stage tags do not prescribe a mesh or animation. */
+	UPROPERTY(BlueprintAssignable, Category = "SeinARTS")
+	FSeinConstructionStageChanged OnConstructionStageChanged;
+	/** Refresh the group mapping from the bound entity, including after restoring a save. */
+	virtual void RefreshPresentation_Implementation() override;
+	/** Legacy refresh alias. New presentation code uses Refresh Entity Binding. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Construction", meta = (DeprecatedFunction, DeprecationMessage = "Use Refresh Entity Binding."))
+	void RefreshConstructionState() { RefreshEntityBinding(); }
+	void HandleVisualEvent(const FSeinVisualEvent& Event) { HandleBoundVisualEvent(Event); }
+
+	// Serialized migration input only. Runtime presentation uses Groups exclusively.
+	UPROPERTY()
 	ESeinConstructionPlacementVisualType PlacementVisualType = ESeinConstructionPlacementVisualType::None;
-
-	/** Static-mesh placeholder. Visible only when PlacementVisualType == StaticMesh. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
-		meta = (EditCondition = "PlacementVisualType == ESeinConstructionPlacementVisualType::StaticMesh", EditConditionHides))
+	UPROPERTY()
 	TObjectPtr<UStaticMesh> PlacementStaticMesh;
-
-	/** Skeletal-mesh placeholder. Visible only when PlacementVisualType == SkeletalMesh. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
-		meta = (EditCondition = "PlacementVisualType == ESeinConstructionPlacementVisualType::SkeletalMesh", EditConditionHides))
+	UPROPERTY()
 	TObjectPtr<USkeletalMesh> PlacementSkeletalMesh;
-
-	/** AActor blueprint to spawn at the entity's pose during construction.
-	 *  Visible only when PlacementVisualType == BlueprintActor. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
-		meta = (EditCondition = "PlacementVisualType == ESeinConstructionPlacementVisualType::BlueprintActor", EditConditionHides))
+	UPROPERTY()
 	TSubclassOf<AActor> PlacementBlueprint;
-
-	/** Optional decal material stamped on the ground beneath this entity's
-	 *  footprint while it is under construction (e.g. a gravel patch showing
-	 *  where construction is laid out). Composes orthogonally with
-	 *  PlacementVisualType — works alongside any placeholder type or on its
-	 *  own. Null = no decal. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
+	UPROPERTY()
 	TObjectPtr<UMaterialInterface> GroundStampDecal;
-
-	/** World-space size of the spawned ground decal. Defaults to a ~5m x 5m
-	 *  patch projected ~1m down. Designers should match this to the
-	 *  building's footprint. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS")
-	FVector GroundStampDecalSize = FVector(256.0f, 256.0f, 256.0f);
-
-	// ─── UActorComponent ───
-
-	virtual void BeginPlay() override;
-	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
-
-	/** Bound to the entity bridge's `OnVisualEvent` delegate. Filters by
-	 *  Type=ConstructionStateChanged and Event.Value (bUnderConstruction);
-	 *  drives Enter / Exit construction state. */
-	UFUNCTION()
-	void HandleVisualEvent(const FSeinVisualEvent& Event);
-
+	UPROPERTY()
+	FVector GroundStampDecalSize = FVector(256);
+protected:
+	virtual void HandleBoundVisualEvent(const FSeinVisualEvent& Event) override;
+	virtual void BindingWillChange() override;
 private:
-	/** Hide main mesh components, spawn the configured placement visual
-	 *  (+ optional decal). Idempotent — guarded by `bInConstructionState`. */
-	void EnterConstructionState();
-
-	/** Destroy spawned visuals, restore main mesh visibility. Idempotent. */
-	void ExitConstructionState();
-
-	/** Spawned placement actor, when PlacementVisualType == BlueprintActor. */
-	UPROPERTY(Transient)
-	TObjectPtr<AActor> SpawnedPlacementActor;
-
-	/** Spawned static-mesh component, when PlacementVisualType == StaticMesh. */
-	UPROPERTY(Transient)
-	TObjectPtr<UStaticMeshComponent> SpawnedPlacementStaticMesh;
-
-	/** Spawned skeletal-mesh component, when PlacementVisualType == SkeletalMesh. */
-	UPROPERTY(Transient)
-	TObjectPtr<USkeletalMeshComponent> SpawnedPlacementSkeletalMesh;
-
-	/** Spawned ground-stamp decal component, when GroundStampDecal is set. */
-	UPROPERTY(Transient)
-	TObjectPtr<UDecalComponent> SpawnedDecalComponent;
-
-	/** Mesh components hidden by EnterConstructionState (the actor's "final"
-	 *  visuals). Restored on ExitConstructionState. We track only the ones
-	 *  we hid so designer-controlled visibility on other meshes survives the
-	 *  round-trip unchanged. */
-	UPROPERTY(Transient)
-	TArray<TWeakObjectPtr<UMeshComponent>> HiddenMainMeshes;
-
-	/** Cached bridge ref so we can unsubscribe cleanly in EndPlay. */
-	UPROPERTY(Transient)
-	TWeakObjectPtr<USeinEntityBridgeComponent> CachedBridge;
-
-	bool bInConstructionState = false;
+	bool bHasState = false;
+	ESeinConstructionState CurrentState = ESeinConstructionState::Complete;
+	FGameplayTag CurrentStage;
+	void ApplyState(ESeinConstructionState State);
 };

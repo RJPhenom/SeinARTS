@@ -75,9 +75,8 @@ public:
 	/** Include this component's payload at spawn injection. Uncheck on a
 	 *  placed instance for the native "this unit doesn't carry X" gesture —
 	 *  Unreal has no per-instance component removal, so this is the supported
-	 *  substitute. AdvancedDisplay: rarely touched, so it sits in the Advanced
-	 *  section beside PayloadStruct instead of leading the payload fields. */
-	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "SeinARTS",
+	 *  substitute. */
+	UPROPERTY(EditAnywhere, Category = "SeinARTS",
 		meta = (DisplayName = "Injection Enabled"))
 	bool bInjectionEnabled = true;
 
@@ -85,7 +84,7 @@ public:
 	 *  Blueprint's variables on compile (field identity is rename-stable via
 	 *  source-variable GUID stamps). Native subclasses ignore this — they
 	 *  override GetPayloadStruct with their embedded struct's type. */
-	UPROPERTY(VisibleDefaultsOnly, AdvancedDisplay, Category = "SeinARTS",
+	UPROPERTY(VisibleDefaultsOnly, Category = "SeinARTS",
 		meta = (DisplayName = "Payload Struct"))
 	TObjectPtr<UUserDefinedStruct> PayloadStruct;
 
@@ -281,7 +280,7 @@ public:
 	}
 };
 
-/** Construction-site state (built by workers over time). */
+/** Optional construction job lifecycle. Abilities choose the completion rule. */
 UCLASS(NotBlueprintable, ClassGroup = (SeinARTS), meta = (BlueprintSpawnableComponent))
 class SEINARTSCOREENTITY_API USeinConstructionComponent : public USeinEntityComponent
 {

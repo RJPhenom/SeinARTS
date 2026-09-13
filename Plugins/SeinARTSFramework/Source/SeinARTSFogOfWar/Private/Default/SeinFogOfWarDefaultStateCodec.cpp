@@ -1414,7 +1414,7 @@ SeinRegisterDefaultFogOfWarStateCodec(FString& OutError)
 	Descriptor.StableImplementationId =
 		TEXT("seinarts.fog.default-grid");
 	Descriptor.StateSchemaVersion = 1;
-	Descriptor.BehaviorRevision = 2;
+	Descriptor.BehaviorRevision = 3;
 	Descriptor.CodecRevision = 5;
 	Descriptor.PayloadStruct =
 		FSeinFogOfWarDefaultCanonicalState::StaticStruct();

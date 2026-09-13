@@ -85,7 +85,8 @@ namespace UE::SeinARTSTests
 
 				Bridge->ComponentData.Reset();
 				FSeinConstructionPayload Construction;
-				Construction.TimeToCompletion = FFixedPoint::FromInt(3);
+				Construction.RequiredWork = FFixedPoint::FromInt(3);
+				Construction.bQueueConstructionOnSpawn = true;
 				Bridge->ComponentData.Add(
 					FInstancedStruct::Make(Construction));
 				Bridge->BaseTags.Reset();
@@ -301,7 +302,7 @@ namespace UE::SeinARTSTests
 		FSeinWorldSnapshot PartialSnapshot;
 		World->CaptureSnapshot(PartialSnapshot);
 		int32 ContinuationTicks = 0;
-		while (World->GetComponent<FSeinConstructionPayload>(Building)
+		while (USeinConstructionBPFL::SeinIsUnderConstruction(World, Building)
 			&& ContinuationTicks < 10)
 		{
 			Tick(*World);
@@ -363,8 +364,7 @@ namespace UE::SeinARTSTests
 			auto SimScope = FSeinSimContextTestAccess::Enter(*World);
 			USeinConstructionBPFL::SeinFinishConstruction(World, Building);
 		}
-		ASSERT_THAT(IsNull(
-			World->GetComponent<FSeinConstructionPayload>(Building)));
+		ASSERT_THAT(IsTrue(USeinConstructionBPFL::SeinGetConstructionStatus(World, Building).State == ESeinConstructionState::Complete));
 		ASSERT_THAT(IsTrue(World->HasTag(
 			Building, SeinARTSTags::State_UnderConstruction)));
 		ASSERT_THAT(IsTrue(World->GetEntityBaseTags(Building).HasTagExact(
@@ -399,7 +399,8 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(IsNotNull(LiveBridge));
 		LiveBridge->ComponentData.Reset();
 		FSeinConstructionPayload PlacedConstruction;
-		PlacedConstruction.TimeToCompletion = FFixedPoint::FromInt(3);
+		PlacedConstruction.RequiredWork = FFixedPoint::FromInt(3);
+		PlacedConstruction.bQueueConstructionOnSpawn = true;
 		LiveBridge->ComponentData.Add(
 			FInstancedStruct::Make(PlacedConstruction));
 		LiveBridge->BaseTags.Reset();
@@ -467,7 +468,9 @@ namespace UE::SeinARTSTests
 					World->GetComponentMutable<FSeinConstructionPayload>(
 						ZeroTimeBuilding);
 				check(ZeroTime);
-				ZeroTime->TimeToCompletion = FFixedPoint::Zero;
+				ZeroTime->JobRequiredWork = FFixedPoint::Zero;
+				ZeroTime->RequiredWork = FFixedPoint::Zero;
+				USeinConstructionBPFL::SeinStartConstruction(World, USeinConstructionBPFL::SeinGetConstructionStatus(World, ZeroTimeBuilding).Construction);
 			})));
 		ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
 
@@ -496,7 +499,9 @@ namespace UE::SeinARTSTests
 					BoundedBuilding);
 			ASSERT_THAT(IsNotNull(Construction));
 			Construction->Progress = FFixedPoint(MAX_int64 - 1);
-			Construction->TimeToCompletion = FFixedPoint::MaxValue;
+			Construction->JobRequiredWork = FFixedPoint::MaxValue;
+			Construction->RequiredWork = FFixedPoint::MaxValue;
+			USeinConstructionBPFL::SeinStartConstruction(World, USeinConstructionBPFL::SeinGetConstructionStatus(World, BoundedBuilding).Construction);
 		}
 		FGuid PreOverflowRoot;
 		ASSERT_THAT(IsTrue(World->ComputeCanonicalStateRoot(
@@ -517,8 +522,7 @@ namespace UE::SeinARTSTests
 				USeinConstructionBPFL::SeinAddConstructionProgress(
 					World, ZeroTimeBuilding, FFixedPoint::SmallNumber)));
 		}
-		ASSERT_THAT(IsNull(
-			World->GetComponent<FSeinConstructionPayload>(ZeroTimeBuilding)));
+		ASSERT_THAT(IsTrue(USeinConstructionBPFL::SeinGetConstructionStatus(World, ZeroTimeBuilding).State == ESeinConstructionState::Complete));
 		ASSERT_THAT(IsFalse(World->HasTag(
 			ZeroTimeBuilding, SeinARTSTags::State_UnderConstruction)));
 		World->StopSimulation();

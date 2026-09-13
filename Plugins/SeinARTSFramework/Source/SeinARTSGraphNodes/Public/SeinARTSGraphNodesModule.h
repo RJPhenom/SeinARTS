@@ -1,7 +1,10 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinARTSGraphNodesModule.h
- * @brief   Module shell for the SeinARTS GraphNodes module — hosts K2 nodes
+ * @author  RJ Macklem
+ * @created 7 Sep 2026
+ * @latest  7 Sep 2026
+ * @brief   Owns component action discovery and refresh, and hosts K2 nodes
  *          (custom Blueprint graph nodes) for the framework's BP authoring
  *          tooling. The module is `Type=UncookedOnly` so the K2 nodes load
  *          in the editor + during cook commandlets (where `ExpandNode`
@@ -28,21 +31,53 @@
  *          Future K2 nodes for other subsystems (movement, cover, FoW) land
  *          here too — one shared graph-nodes module per plugin keeps the dep
  *          graph simple.
+ *
+ * @disclaimer Generated with assistance from an AI language model.
  */
 
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/Ticker.h"
 #include "Modules/ModuleManager.h"
 
-class FSeinARTSGraphNodesModule : public IModuleInterface
+class SEINARTSGRAPHNODES_API FSeinARTSGraphNodesModule : public IModuleInterface
 {
 public:
 	virtual void StartupModule() override;
 	virtual void PreUnloadCallback() override;
 	virtual void ShutdownModule() override;
 
+	/** Queue a Get/Set action refresh after component payload generation finishes.
+	 *  Discovery also loads saved component types that have not been opened. */
+	void RequestComponentActionsRefresh(bool bDiscoverAssets = false);
+
 private:
+	bool TickComponentActions(float DeltaTime);
+	void RegisterAbilityCompileHook();
+	void OnAbilityBlueprintCompiled();
+	FDelegateHandle AbilityEngineInitHandle;
+	bool TickAbilityInputs(float DeltaTime);
+	FDelegateHandle AbilityCompiledHandle;
+	FTSTicker::FDelegateHandle AbilityInputsTicker;
+	void OnComponentAssetChanged(const struct FAssetData& Asset);
+	void OnComponentAssetRenamed(const struct FAssetData& Asset, const FString& OldPath);
+	void OnComponentObjectLoaded(UObject* Object);
+	void OnComponentFilesLoaded();
+	void OnComponentsPreDelete(const TArray<UObject*>& Objects);
+
+	FTSTicker::FDelegateHandle ComponentActionsTicker;
+	FDelegateHandle ComponentAssetAdded;
+	FDelegateHandle ComponentAssetRemoved;
+	FDelegateHandle ComponentAssetUpdated;
+	FDelegateHandle ComponentAssetRenamed;
+	FDelegateHandle ComponentObjectLoaded;
+	FDelegateHandle ComponentFilesLoaded;
+	FDelegateHandle ComponentPreDelete;
+	FDelegateHandle ComponentPreForceDelete;
+	bool bDiscoverComponentAssets = false;
+	bool bRefreshingComponentActions = false;
+
 	/**
 	 * Synchronously sever editor-owned references to this generation's node
 	 * delegates and template nodes. PreUnloadCallback and ShutdownModule share

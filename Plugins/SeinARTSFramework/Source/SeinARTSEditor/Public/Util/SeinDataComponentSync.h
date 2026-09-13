@@ -37,5 +37,5 @@ namespace SeinDataComponentSync
 	 *  and return it. With zero qualifying variables the link is cleared and
 	 *  no asset is created. Editor-only; must be called OUTSIDE Blueprint/UDS
 	 *  compilation. */
-	UUserDefinedStruct* SyncPayloadStructForBlueprint(UBlueprint* Blueprint);
+	SEINARTSEDITOR_API UUserDefinedStruct* SyncPayloadStructForBlueprint(UBlueprint* Blueprint);
 }

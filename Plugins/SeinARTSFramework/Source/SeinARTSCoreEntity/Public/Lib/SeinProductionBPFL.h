@@ -1,11 +1,12 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinProductionBPFL.h
- * @brief   Read-only BPFL for production state. Producer-side mutation
+ * @brief   Production queries and deterministic runtime policy overrides. Queue mutation
  *          (enqueue, rally, etc.) lives as one-arg convenience methods on
  *          USeinAbility — production is unified into the ability surface,
  *          and an ability's BP graph mutates production via Self.* calls.
- *          Cancel-by-queue-index stays its own command (Command_Type_CancelProduction).
+ *          Cancel Production on USeinAbility shares cancellation/refund logic
+ *          with the queue-index command (Command_Type_CancelProduction).
  */
 
 #pragma once
@@ -16,6 +17,7 @@
 #include "Core/SeinPlayerID.h"
 #include "GameplayTagContainer.h"
 #include "Components/SeinProductionPayload.h"
+#include "Components/SeinProductionPolicy.h"
 #include "SeinProductionBPFL.generated.h"
 
 class USeinWorldSubsystem;
@@ -26,6 +28,32 @@ class SEINARTSCOREENTITY_API USeinProductionBPFL : public UBlueprintFunctionLibr
 	GENERATED_BODY()
 
 public:
+
+	/** Check whether another item can be queued. Used includes queued and completed purchases in the effective scope. Producer overrides take precedence over player overrides and class defaults. */
+	UFUNCTION(BlueprintPure, Category = "SeinARTS|Production", meta = (WorldContext = "WorldContextObject", DisplayName = "Can Enqueue Production", SeinDeterministic))
+	static bool SeinCanEnqueueProduction(const UObject* WorldContextObject, FSeinEntityHandle Producer,
+		TSubclassOf<ASeinActor> ProducibleClass, ESeinProductionQueueResult& Result,
+		FSeinProductionQueueSettings& Settings, int64& Used);
+
+	/** Override this producible's policy for one producer. Existing entries and completed history remain. Returns false for an invalid amount or unauthorized call. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Production", meta = (WorldContext = "WorldContextObject", DisplayName = "Set Production Unit Queue Policy", SeinDeterministic))
+	static bool SeinSetProductionUnitQueuePolicy(const UObject* WorldContextObject, FSeinEntityHandle Producer,
+		TSubclassOf<ASeinActor> ProducibleClass, FSeinProductionQueueSettings Settings);
+
+	/** Clear this producer's override for the item, restoring the player override or authored defaults. Does not clear history. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Production", meta = (WorldContext = "WorldContextObject", DisplayName = "Clear Production Unit Queue Policy", SeinDeterministic))
+	static bool SeinClearProductionUnitQueuePolicy(const UObject* WorldContextObject, FSeinEntityHandle Producer,
+		TSubclassOf<ASeinActor> ProducibleClass);
+
+	/** Override this producible's policy for a player. Producer overrides take precedence. Existing entries and completed history remain. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Production", meta = (WorldContext = "WorldContextObject", DisplayName = "Set Player Queue Policy", SeinDeterministic))
+	static bool SeinSetPlayerQueuePolicy(const UObject* WorldContextObject, FSeinPlayerID Player,
+		TSubclassOf<ASeinActor> ProducibleClass, FSeinProductionQueueSettings Settings);
+
+	/** Clear this player's override for the item, restoring authored defaults where no producer override exists. Does not clear history. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Production", meta = (WorldContext = "WorldContextObject", DisplayName = "Clear Player Queue Policy", SeinDeterministic))
+	static bool SeinClearPlayerQueuePolicy(const UObject* WorldContextObject, FSeinPlayerID Player,
+		TSubclassOf<ASeinActor> ProducibleClass);
 
 	// ==================== Read ====================
 

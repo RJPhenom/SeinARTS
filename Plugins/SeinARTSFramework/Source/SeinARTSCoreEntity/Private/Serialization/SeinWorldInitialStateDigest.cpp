@@ -16,6 +16,29 @@
 
 namespace
 {
+	bool WriteProductionPolicyState(FSeinCanonicalDigestWriter& Writer, const FSeinProductionPolicyState& State)
+	{
+		TArray<FString> Keys;
+		State.Completed.GetKeys(Keys);
+		Keys.Sort();
+		if (!State.IsValid() || !Writer.WriteUInt32(static_cast<uint32>(Keys.Num()))) return false;
+		for (const FString& Key : Keys)
+		{
+			if (!Writer.WriteString(Key) || !Writer.WriteInt64(State.Completed.FindChecked(Key))) return false;
+		}
+		State.Overrides.GetKeys(Keys);
+		Keys.Sort();
+		if (!Writer.WriteUInt32(static_cast<uint32>(Keys.Num()))) return false;
+		for (const FString& Key : Keys)
+		{
+			const auto& Settings = State.Overrides.FindChecked(Key);
+			if (!Writer.WriteString(Key)
+				|| !Writer.WriteUInt8(static_cast<uint8>(Settings.QueuePolicy))
+				|| !Writer.WriteInt32(Settings.QueueAmount)) return false;
+		}
+		return true;
+	}
+
 	bool WriteHandle(
 		FSeinCanonicalDigestWriter& Writer,
 		FSeinEntityHandle Handle)
@@ -312,6 +335,7 @@ bool USeinWorldSubsystem::ComputeCanonicalInitialStateDigest(
 			|| !Writer.WriteBool(Player.bReady)
 			|| !Writer.WriteBool(Player.bIsSpectator)
 			|| !Writer.WriteBool(Player.bIsAI)
+			|| !WriteProductionPolicyState(Writer, Player.ProductionPolicyState)
 			|| !WriteTagMap(Writer, Player.Resources,
 				[&Writer](const FFixedPoint& Value)
 				{

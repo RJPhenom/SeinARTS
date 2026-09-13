@@ -165,11 +165,13 @@ private:
 	TMap<FName, FSeinComponentDataDrawDelegate> ComponentDataDraws;
 	TMap<FName, FSeinSettingsCategoryContribution>
 		SettingsCategoryContributions;
+	FDelegateHandle ActivationVariableCustomizationHandle;
 	FDelegateHandle AbilityContinuationPreCompileHandle;
 	FDelegateHandle ComponentDataPreCompileHandle;
 	FDelegateHandle DataComponentPreCompileHandle;  // AC-authoring prototype
 	TUniquePtr<FAutoConsoleCommand> AuthoringStatsCommand;
 	FDelegateHandle OnAssetRenamedHandle;  // auto-tag-generation rename hook
+	FDelegateHandle OnTaggableAssetAddedHandle;
 	bool bModuleOwnedStateReleased = false;
 	static EAssetTypeCategories::Type SeinARTSCategoryBit;
 };

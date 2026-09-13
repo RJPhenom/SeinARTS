@@ -26,6 +26,23 @@ class USeinProductionCostTestMoveAbility : public USeinAbility
 	GENERATED_BODY()
 };
 
+/** Constructor-defined grants for produced-entity automatic movement tests. */
+UCLASS()
+class USeinDefaultMoveTestFirstAbility : public USeinAbility
+{
+	GENERATED_BODY()
+public:
+	USeinDefaultMoveTestFirstAbility();
+};
+
+UCLASS()
+class USeinDefaultMoveTestSelectedAbility : public USeinAbility
+{
+	GENERATED_BODY()
+public:
+	USeinDefaultMoveTestSelectedAbility();
+};
+
 /** Persistent player-scope effect used by research completion tests. */
 UCLASS()
 class USeinProductionCostTestResearchEffect : public USeinEffect

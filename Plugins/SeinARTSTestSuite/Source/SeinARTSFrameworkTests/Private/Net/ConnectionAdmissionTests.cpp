@@ -101,6 +101,20 @@ namespace UE::SeinARTSTests
 			&Controller, Options, FUniqueNetIdRepl(), Slot, Error)));
 		ASSERT_THAT(IsTrue(Error.Contains(TEXT("expired or changed"))));
 
+		APlayerController& Replacement = Spawner.SpawnActor<APlayerController>();
+		ASSERT_THAT(IsFalse(Net->TransferAuthorizedConnection(
+			&Controller, &Replacement, FSeinPlayerID(2))));
+		ASSERT_THAT(IsTrue(Net->GetAuthorizedConnectionSlot(&Controller, Slot)));
+		ASSERT_THAT(IsFalse(Net->GetAuthorizedConnectionSlot(&Replacement, Slot)));
+		ASSERT_THAT(IsTrue(Net->TransferAuthorizedConnection(
+			&Controller, &Replacement, FSeinPlayerID(3))));
+		Net->ReleaseAuthorizedConnection(&Controller);
+		ASSERT_THAT(IsTrue(Net->GetAuthorizedConnectionSlot(&Replacement, Slot)));
+		ASSERT_THAT(IsTrue(Slot == FSeinPlayerID(3)));
+		ASSERT_THAT(IsFalse(Net->GetAuthorizedConnectionSlot(&Controller, Slot)));
+		ASSERT_THAT(IsTrue(Net->TransferAuthorizedConnection(
+			&Replacement, &Replacement, FSeinPlayerID(3))));
+
 		Net->UnregisterConnectionAdmissionAuthorizer(
 			TEXT("SeinARTS.Tests.OtherOwner"));
 		ASSERT_THAT(IsTrue(Net->HasConnectionAdmissionAuthorizer()));

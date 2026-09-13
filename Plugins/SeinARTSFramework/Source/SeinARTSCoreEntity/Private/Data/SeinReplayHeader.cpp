@@ -14,9 +14,9 @@ namespace
 {
 	// Manual compatibility epoch for deterministic framework behaviour that is
 	// not already represented by the command/config/settings digests.
-	// 8: removed bShowNavigationPreview / bShowFormationPreview from the
-	//    navigation/squad component schemas (preview opt-in moved render-side).
-	constexpr TCHAR GSeinReplayFrameworkVersion[] = TEXT("SeinARTS.Replay.8");
+	// 10: construction work fields are consolidated into the construction
+	//     payload; the separate work component and payload are removed.
+	constexpr TCHAR GSeinReplayFrameworkVersion[] = TEXT("SeinARTS.Replay.10");
 }
 
 FString SeinReplayCompatibility::GetFrameworkVersion()

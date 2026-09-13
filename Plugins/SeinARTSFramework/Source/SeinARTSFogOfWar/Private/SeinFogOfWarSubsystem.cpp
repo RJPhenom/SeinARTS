@@ -87,7 +87,7 @@ namespace
 		{
 			return FSeinSystemDescriptor::WithCanonicalState(
 				FName(TEXT("seinarts.fog_of_war.stamp")),
-				1u,
+				2u,
 				ESeinTickPhase::PostTick,
 				SeinSystemPriority::FogOfWar,
 				{ FName(TEXT(

@@ -15,6 +15,7 @@
  */
 
 #include "Abilities/SeinAbility.h"
+#include "UObject/UnrealType.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Abilities/SeinLatentActionManager.h"
 #include "Lib/SeinResourceBPFL.h"
@@ -184,6 +185,15 @@ void USeinAbility::EnqueueProduction(TSubclassOf<ASeinActor> ProducibleClass)
 		return;
 	}
 
+	FSeinProductionQueueSettings QueueSettings;
+	int64 QueueUsed = 0;
+	if (WorldSubsystem->CheckProductionQueue(OwnerEntity, ProducibleClass, QueueSettings, QueueUsed)
+		!= ESeinProductionQueueResult::Available)
+	{
+		RollBackFailedEnqueue();
+		return;
+	}
+
 	// The activation snapshot is already policy-resolved. Immediate abilities
 	// transfer the full deducted cost and no completion cost; Production Queue
 	// abilities transfer the catalog split.
@@ -219,6 +229,22 @@ void USeinAbility::EnqueueProduction(TSubclassOf<ASeinActor> ProducibleClass)
 		WorldSubsystem->EnqueueVisualEvent(FSeinVisualEvent::MakeProductionEvent(
 			OwnerEntity, IdentityTag, /*bCompleted=*/false));
 	}
+}
+
+bool USeinAbility::CancelProduction(int32 QueueIndex)
+{
+	if (!WorldSubsystem)
+	{
+		return false;
+	}
+	if (!SeinIsInSimContext(WorldSubsystem))
+	{
+		UE_LOG(LogSeinAbilityImpl, Error,
+			TEXT("CancelProduction rejected outside this world's simulation context for %s"),
+			*GetName());
+		return false;
+	}
+	return WorldSubsystem->CancelProduction(OwnerEntity, QueueIndex);
 }
 
 void USeinAbility::SetRallyPoint(const FFixedTransform& Transform)
@@ -362,20 +388,20 @@ void USeinAbility::ReleaseCommittedGrantedTags()
 	CommittedGrantedTags.Reset();
 }
 
-bool USeinAbility::ActivateAbility(FSeinEntityHandle Target, FFixedVector Location)
+bool USeinAbility::ActivateAbility(FSeinEntityHandle Target, FFixedVector Location, const FSeinAbilityActivationInputs& Inputs)
 {
-	return ActivateAbilityInternal(Target, Location, nullptr);
+	return ActivateAbilityInternal(Target, Location, nullptr, Inputs);
 }
 
 bool USeinAbility::ActivateAbilityWithTargeterPoints(FSeinEntityHandle Target, FFixedVector Location,
-	const TArray<FSeinTargeterPoint>& Points)
+	const TArray<FSeinTargeterPoint>& Points, const FSeinAbilityActivationInputs& Inputs)
 {
-	return ActivateAbilityInternal(Target, Location, &Points);
+	return ActivateAbilityInternal(Target, Location, &Points, Inputs);
 }
 
 bool USeinAbility::ActivateAbilityInternal(FSeinEntityHandle Target,
 	FFixedVector Location,
-	const TArray<FSeinTargeterPoint>* Points)
+	const TArray<FSeinTargeterPoint>* Points, const FSeinAbilityActivationInputs& Inputs)
 {
 	if (!WorldSubsystem
 		|| !WorldSubsystem->RequireStateMutationAuthorization(
@@ -387,6 +413,14 @@ bool USeinAbility::ActivateAbilityInternal(FSeinEntityHandle Target,
 	if (bIsActive)
 	{
 		return false;
+	}
+	TStrongObjectPtr<USeinAbility> InputValues;
+	const TArray<FName> InputNames = GetActivationInputNames();
+	if (!InputNames.IsEmpty() || !Inputs.IsEmpty())
+	{
+		InputValues.Reset(NewObject<USeinAbility>(GetTransientPackage(), GetClass()));
+		FString InputError;
+		if (!Inputs.Decode(*InputValues, InputError)) return false;
 	}
 	MarkDeterministicStateDirty();
 	if (!AcquireGrantedTags())
@@ -443,6 +477,12 @@ bool USeinAbility::ActivateAbilityInternal(FSeinEntityHandle Target,
 		return false;
 	}
 
+	for (FName Name : InputNames)
+	{
+		FProperty* Property = FindFProperty<FProperty>(GetClass(), Name);
+		Property->CopyCompleteValue(Property->ContainerPtrToValuePtr<void>(this),
+			Property->ContainerPtrToValuePtr<void>(InputValues.Get()));
+	}
 	CooldownRecipientIDs.Reset();
 	// Start cooldown if the ability's timing fires on activate. OnEnd-timed abilities
 	// defer cooldown until DeactivateAbility.
@@ -451,6 +491,9 @@ bool USeinAbility::ActivateAbilityInternal(FSeinEntityHandle Target,
 		StartCooldownInternal();
 	}
 
+	// Queue before designer callbacks so an immediate end follows activation.
+	WorldSubsystem->EnqueueVisualEvent(
+		FSeinVisualEvent::MakeAbilityEvent(OwnerEntity, AbilityTag, true));
 	OnActivate();
 	return true;
 }
@@ -485,6 +528,9 @@ void USeinAbility::DeactivateAbility(bool bCancelled)
 	// revoked and its pool slot recycled during OnEnd; pointer-validated world
 	// ownership ensures it can never clear the replacement afterwards.
 	WorldSubsystem->UnregisterAbilityActivity(this);
+	// Queue before cleanup callbacks can activate a replacement ability.
+	WorldSubsystem->EnqueueVisualEvent(
+		FSeinVisualEvent::MakeAbilityEvent(OwnerEntity, AbilityTag, false));
 
 	// Refund only the costs and cooldown writes owned by this activation.
 	if (bCancelled && WorldSubsystem)
@@ -629,3 +675,35 @@ void USeinAbility::RefundCooldownInternal()
 		}
 	}
 }
+
+TArray<FName> USeinAbility::GetActivationInputNames() const
+{
+	const USeinAbility* Defaults = GetClass()->GetDefaultObject<USeinAbility>();
+	TArray<FName> Names = Defaults->NativeActivationInputNames;
+#if WITH_EDITOR
+	for (TFieldIterator<FProperty> It(GetClass(), EFieldIterationFlags::IncludeSuper); It; ++It)
+	{
+		if (It->GetBoolMetaData(TEXT("SeinExposeOnActivate"))) Names.AddUnique(It->GetFName());
+	}
+#else
+	for (FName Name : Defaults->ActivationInputNames) Names.AddUnique(Name);
+#endif
+	Names.Sort(FNameLexicalLess());
+	return Names;
+}
+
+void USeinAbility::Serialize(FArchive& Ar)
+{
+#if WITH_EDITOR
+	if (Ar.IsSaving() && HasAnyFlags(RF_ClassDefaultObject)) ActivationInputNames = GetActivationInputNames();
+#endif
+	Super::Serialize(Ar);
+}
+
+#if WITH_EDITOR
+void USeinAbility::PostCDOCompiled(const FPostCDOCompiledContext& Context)
+{
+	Super::PostCDOCompiled(Context);
+	ActivationInputNames = GetActivationInputNames();
+}
+#endif

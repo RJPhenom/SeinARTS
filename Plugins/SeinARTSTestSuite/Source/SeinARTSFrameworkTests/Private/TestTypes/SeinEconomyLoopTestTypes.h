@@ -19,6 +19,7 @@
 #include "Actor/SeinActor.h"
 #include "Components/SeinPayload.h"
 #include "Types/FixedPoint.h"
+#include "Components/SeinConstructionTypes.h"
 #include "SeinEconomyLoopTestTypes.generated.h"
 
 USTRUCT(meta = (SeinDeterministic))
@@ -88,6 +89,9 @@ class USeinEconomyConstructTestAbility : public USeinAbility
 
 public:
 	USeinEconomyConstructTestAbility();
+virtual void OnActivate_Implementation() override;
+UPROPERTY()
+FSeinConstructionHandle Construction;
 	virtual void OnTick_Implementation(FFixedPoint DeltaTime) override;
 
 	UPROPERTY(EditDefaultsOnly)

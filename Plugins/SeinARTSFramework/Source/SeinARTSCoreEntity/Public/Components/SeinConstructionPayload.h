@@ -1,72 +1,70 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinConstructionComponent.h
- * @brief   Construction-over-time component for placed buildings (Pattern B).
- *          The placement ability spawns a building with this
- *          component attached; a builder unit's BA_Construct ability ticks
- *          Progress each sim tick. When Progress >= TimeToCompletion, the building
- *          transitions to operational via the optional CompletionEffect.
- *
- *          Lifecycle:
- *            1. BA_PlaceX spawns building with FSeinConstructionPayload (Progress=0)
- *               and SeinARTS.State.UnderConstruction tag granted.
- *            2. Builder runs BA_Construct, calls SeinAddConstructionProgress
- *               each sim tick. When threshold crosses, BPFL auto-finishes:
- *                 a. Applies CompletionEffect (if set) to the building.
- *                 b. Removes the FSeinConstructionPayload component.
- *                 c. Ungrants SeinARTS.State.UnderConstruction tag.
- *            3. Building's normal abilities — gated via BlockedTags
- *               on SeinARTS.State.UnderConstruction — become invokable.
- *
- *          Multiple builders ticking the same target stack — each adds its
- *          own DeltaTime-scaled progress per tick. Designer's BA_Construct
- *          can apply a per-worker speed multiplier (e.g. 1.0 for first
- *          builder, 0.5 for each additional to model diminishing returns).
- *
- *          The CompletionEffect is the seam for game-specific transitions:
- *          mesh swap (foundation → finished building), grant operational
- *          ability set, fire VFX/audio, register with capture-point system,
- *          etc. Effects are designer-authored USeinEffect Blueprint subclasses.
+ * @file         SeinConstructionPayload.h
+ * @author       RJ Macklem
+ * @created      11 Sep 2026
+ * @latest       11 Sep 2026
+ * @brief        Stores construction settings and persistent deterministic job state.
+ * @disclaimer   This code was generated in part with the assistance of an AI language model.
  */
-
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Components/SeinPayload.h"
+#include "Components/SeinConstructionTypes.h"
 #include "Templates/SubclassOf.h"
-#include "Types/FixedPoint.h"
 #include "SeinConstructionPayload.generated.h"
 
 class USeinEffect;
 
+/** Settings survive completion. Use construction operations to change the job's lifecycle. */
 USTRUCT(BlueprintType, meta = (SeinDeterministic))
 struct SEINARTSCOREENTITY_API FSeinConstructionPayload : public FSeinPayload
 {
 	GENERATED_BODY()
 
-	/** Total construction time in sim-seconds. Authored on the building BP's
-	 *  CDO. Snapshotted on attach — modifiers that affect mid-construction
-	 *  build speed should adjust the per-tick Progress increment in
-	 *  BA_Construct, not mutate this value. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS",
-		meta = (ClampMin = "0.0"))
+	/** Start as an unfinished site waiting for work. Off starts completed without applying a completion effect.
+	 *  Applies to spawned entities and level instances. Start Construction begins work separately. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS", meta = (DisplayName = "Start Queued for Construction"))
+	bool bQueueConstructionOnSpawn = false;
+
+	/** Legacy duration used only when migrating older construction assets to Required Work. */
+	UPROPERTY()
 	FFixedPoint TimeToCompletion = FFixedPoint::FromInt(10);
 
-	/** Current progress (sim-seconds). Advances from 0 toward TimeToCompletion via
-	 *  USeinConstructionBPFL::SeinAddConstructionProgress. When Progress >=
-	 *  TimeToCompletion, BPFL auto-applies CompletionEffect + removes this component. */
+	/** Applied once by Complete Construction. Captured when the job is queued. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
+	TSubclassOf<USeinEffect> CompletionEffect;
+
+	/** Work contributed to the current job. Ignored by games using another completion rule. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
 	FFixedPoint Progress = FFixedPoint::Zero;
 
-	/** USeinEffect class applied to the building entity when construction
-	 *  completes. Empty = just remove the component + ungrant the
-	 *  UnderConstruction tag (the building's normal abilities become invokable
-	 *  on their own).
-	 *
-	 *  Typical authoring: a BP-authored USeinEffect that on Apply swaps the
-	 *  building's render mesh from "foundation" to "complete," fires a
-	 *  visual event for the construction-finish VFX, optionally grants the
-	 *  building's operational ability set if it wasn't pre-granted. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SeinARTS")
-	TSubclassOf<USeinEffect> CompletionEffect;
+	/** Lifecycle phase. Merely carrying this payload does not start construction. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
+	ESeinConstructionState State = ESeinConstructionState::Complete;
+
+	/** Designer milestone, changed through Set Construction Stage. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
+	FGameplayTag Stage;
+
+	/** Job identity, retained after completion to reject stale worker actions. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
+	int32 JobID = 0;
+
+	/** Work needed for the next job. Units belong to the build ability; HP-based construction may ignore this field. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SeinARTS", meta = (ClampMin = "0"))
+	FFixedPoint RequiredWork = FFixedPoint::FromInt(10);
+
+	/** Required work captured when the current job was queued. Changing Required Work affects the next job. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS")
+	FFixedPoint JobRequiredWork = FFixedPoint::Zero;
+
+	/** Completion effect captured at queue time. */
+	UPROPERTY()
+	TSubclassOf<USeinEffect> JobCompletionEffect;
+
+	/** Whether this job owns one UnderConstruction grant independently of other sources. */
+	UPROPERTY()
+	bool bOwnsConstructionTag = false;
 };

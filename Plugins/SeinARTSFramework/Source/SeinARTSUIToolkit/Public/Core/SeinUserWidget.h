@@ -1,8 +1,12 @@
 /**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
- * @file    SeinUserWidget.h
- * @brief   Thin base class for all SeinARTS UI widgets. Provides auto-wired
- *          access to the UI subsystem, player controller, and world subsystem.
+ * @file         SeinUserWidget.h
+ * @author       RJ Macklem
+ * @created      2 Jun 2026
+ * @latest       12 Sep 2026
+ * @brief        Base widget with cached gameplay access and fallback click consumption.
+ *
+ * @disclaimer   Updated with assistance from an AI language model.
  */
 
 #pragma once
@@ -38,6 +42,14 @@ class SEINARTSUITOOLKIT_API USeinUserWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
+	/** Stops unhandled left and right clicks from reaching parent widgets or the game.
+	 *  Child controls and this widget's Blueprint mouse handlers run first.
+	 *  Disable to let unhandled clicks continue to parents, which may still consume them.
+	 *  For a full-screen HUD, keep the widget and layout canvas Not Hit-Testable (Self Only)
+	 *  and its interactive backgrounds Visible so empty screen space remains playable. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Input", meta = (DisplayName = "Consume Clicks"))
+	bool bConsumeClicks = true;
+
 	// ========== Auto-Cached References (available after NativeConstruct) ==========
 
 	/** The UI subsystem (ViewModel factory). */
@@ -76,4 +88,10 @@ public:
 
 protected:
 	virtual void NativeConstruct() override;
+	virtual FReply NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
+	virtual FReply NativeOnMouseButtonUp(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
+	virtual FReply NativeOnMouseButtonDoubleClick(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
+
+private:
+	FReply ConsumeUnhandledClick(FReply Reply, const FPointerEvent& MouseEvent) const;
 };

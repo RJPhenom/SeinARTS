@@ -500,6 +500,7 @@ TArray<FSeinProductionQueueItemInfo> USeinEntityViewModel::GetProductionQueue() 
 		const FSeinProductionQueueEntry& Entry = ProdComp->Queue[Idx];
 
 		FSeinProductionQueueItemInfo Info;
+		Info.QueueOwner = Entity;
 		Info.QueueIndex = Idx;
 		Info.TotalBuildTime = Entry.TotalBuildTime.ToFloat();
 		Info.bIsResearch = Entry.bIsResearch;
@@ -516,21 +517,9 @@ TArray<FSeinProductionQueueItemInfo> USeinEntityViewModel::GetProductionQueue() 
 			}
 		}
 
-		// Resolve display name + icon. For unit entries: producible's CDO.
-		// For research entries: the granted effect's CDO carries name/EffectTag (no
-		// icon convention yet — designers fall back to a research-specific UI).
-		if (Entry.bIsResearch)
-		{
-			if (const USeinEffect* EffectDef = GetDefault<USeinEffect>(Entry.ResearchEffectClass))
-			{
-				Info.IdentityTag = EffectDef->EffectTag;
-				// USeinEffect doesn't carry a designer DisplayName today — use the
-				// EffectTag's leaf name as a fallback so the slot renders something
-				// readable until effect-side display data lands.
-				Info.DisplayName = FText::FromName(EffectDef->EffectTag.GetTagName());
-			}
-		}
-		else if (Entry.ActorClass)
+		// EnqueueProduction preserves the selected class for both units and research.
+		// Its authored identity supplies queue presentation independently of the effect.
+		if (Entry.ActorClass)
 		{
 			// Identity now lives on the producible's entity bridge ComponentData.
 			TArray<const USeinEntityBridgeComponent*> Bridges;

@@ -1,10 +1,11 @@
-﻿/**
+/**
  * SeinARTS Framework - Copyright (c) 2026 Phenom Studios, Inc.
  * @file    SeinWorldSubsystem.cpp
  * @brief   Implementation of the core simulation subsystem.
  */
 
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Abilities/SeinPlacementValidation.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Logging/MessageLog.h"
@@ -20,6 +21,9 @@
 #include "Serialization/SeinLatentActionCodecRegistry.h"
 #include "Serialization/SeinPoolObjectCodecRegistry.h"
 #include "Serialization/SeinSimulationContentManifest.h"
+#include "Serialization/SeinSimulationContentBuildArtifact.h"
+#include "HAL/PlatformProperties.h"
+#include "Misc/Paths.h"
 #include "Serialization/SeinSimulationContentRegistry.h"
 #include "Simulation/SeinCanonicalStateRecipeRegistry.h"
 #include "Simulation/SeinContainmentStateValidation.h"
@@ -45,6 +49,7 @@
 #include "Components/SeinBrokerMembershipData.h"
 #include "Components/SeinCommandBrokerData.h"
 #include "Components/SeinConstructionPayload.h"
+#include "Lib/SeinConstructionBPFL.h"
 #include "Components/SeinContainmentData.h"
 #include "Components/SeinContainmentMemberData.h"
 #include "Components/SeinNavigationPayload.h"
@@ -408,10 +413,8 @@ bool USeinWorldSubsystem::InitializeSimulationContent(
 {
 	ShutdownSimulationContent();
 
-	// Contributor records come from the live in-memory registry in BOTH modes: the
-	// baked path must select the profile whose contributor set matches them exactly,
-	// and the synthesized path seals them directly. Nothing here opens or hashes an
-	// asset — saved-package hashing exists only in the editor manifest bake.
+	// All modes bind the live contributor contracts. Saved-package evidence
+	// is produced by cook or the optional strict-editor recovery tool.
 	FString Error;
 	FSeinSimulationContentRegistrySnapshot RegistrySnapshot;
 	TArray<FSeinSimulationContentContributorRecord> ActiveContributors;
@@ -428,11 +431,44 @@ bool USeinWorldSubsystem::InitializeSimulationContent(
 		return false;
 	}
 
-	// No manifest configured is a supported mode, not an error (None = OFF): seal a
-	// records-free profile over the live contributor records so every way of playing
-	// works with zero setup. Peers exchange and compare this digest exactly like a
-	// baked one, so mismatched code contracts still fail loudly at join; a baked
-	// manifest adds asset-parity records and per-world coverage evidence on top.
+	if (FSeinSimulationContentManifestCodec::UsesEditorSessionCompatibility())
+	{
+		if (!FSeinSimulationContentManifestCodec::BuildEditorSessionProfile(
+			ActiveContributors, SimulationContentProfile, Error))
+		{
+			SimulationContentFailureReason = MoveTemp(Error);
+			return false;
+		}
+		SimulationContentDigest = SimulationContentProfile.RootDigest;
+		bSimulationContentSynthesized = true;
+		bSimulationContentReady = true;
+		UE_LOG(LogSeinSim, Log, TEXT("Editor/development simulation compatibility ready (code contracts only; no saved manifest required)."));
+		return true;
+	}
+
+	if (FPlatformProperties::RequiresCookedData())
+	{
+		const FString ArtifactPath = FPaths::ProjectContentDir()
+			/ FSeinSimulationContentBuildArtifact::RelativeFilename();
+		if (!FSeinSimulationContentBuildArtifact::Load(ArtifactPath, SimulationContentProfile, Error)
+			|| SimulationContentProfile.Contributors != ActiveContributors)
+		{
+			SimulationContentFailureReason = Error.IsEmpty()
+				? TEXT("Cooked compatibility data does not match the running simulation modules. Rebuild this game with its target plugin set.")
+				: MoveTemp(Error);
+			UE_LOG(LogSeinSim, Error, TEXT("Simulation protocol disabled: %s"), *SimulationContentFailureReason);
+			return false;
+		}
+		SimulationContentDigest = SimulationContentProfile.RootDigest;
+		bSimulationContentReady = true;
+		UE_LOG(LogSeinSim, Log, TEXT("Cooked simulation compatibility ready (%d packages, digest=%s)."),
+			SimulationContentProfile.Records.Num(), *SimulationContentDigest.ToString(EGuidFormats::Digits));
+		return true;
+	}
+
+	// Strict uncooked tests may supply saved evidence explicitly. No manifest
+	// configured remains supported by low-level code-contract fixtures.
+
 	if (!Settings || Settings->SimulationContentManifest.IsNull())
 	{
 		FSeinSimulationContentManifestProfile Synthesized;
@@ -563,7 +599,7 @@ bool USeinWorldSubsystem::IsCurrentWorldCoveredBySimulationContent(
 	}
 
 	OutError = FString::Printf(
-		TEXT("World package '%s' is absent from the selected Simulation Content profile. Add it to Available Maps or Additional Simulation Content Roots, then regenerate the manifest."),
+		TEXT("World package '%s' is absent from the selected Simulation Content profile. Include the map in the cook request and rebuild the packaged game, or rebuild the optional evidence if strict editor testing is enabled."),
 		*WorldPackageName);
 	return false;
 }
@@ -3229,7 +3265,7 @@ void USeinWorldSubsystem::DispatchValidatedCommand(
 	const bool bPreserveExactBrokerRecipients = BrokerPayload
 		&& !BrokerPayload->RecipientPlan.IsEmpty();
 	// Ordinary EntitySet commands are normalized once at the common dispatcher
-	// seam. Exact BrokerOrder V4 commands retain their original recipient list:
+	// seam. Exact BrokerOrder V5 commands retain their original recipient list:
 	// their handler owns atomic outer+nested authority and roster validation
 	// against the recipient-segment evidence carried on the wire.
 	if (Schema.AuthorityScope == ESeinCommandAuthorityScope::EntitySet
@@ -5159,66 +5195,15 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 	// here. The activation gate rejects with Unaffordable if the
 	// player runs out by the time the per-member command processes.
 
-	// Footprint placement gate — only meaningful for targeter-originated
-	// orders (have PredeterminedAbilityTag + TargeterPoints). Reuses
-	// the PredeterminedAbility resolved above. Skip silently if any
-	// precondition fails: no predetermined ability, no points, no
-	// capable member, no spec, no extents on the building. This keeps
-	// the gate opt-in and additive — abilities that don't set
-	// bRequiresFreeFootprint are unaffected.
-	if (PredeterminedAbility && Payload->TargeterPoints.Num() > 0
-		&& FootprintPlacementResolver.IsBound()
-		&& PredeterminedAbility->bRequiresFreeFootprint)
+	// Use the same captured-pose check as preview and final activation.
+	if (PredeterminedAbility && !SeinPlacementValidation::IsValidForAbility(
+		*this, *PredeterminedAbility, Payload->TargeterPoints))
 	{
-		// Pull the spec to get BuildingClass, then read extents from CDO.
-		// Only USeinPointFacingTargeterSpec carries a BuildingClass; other
-		// specs silently bypass.
-		const USeinPointFacingTargeterSpec* PFSpec =
-			Cast<USeinPointFacingTargeterSpec>(PredeterminedAbility->TargeterSpec);
-		const FSeinExtentsShape* Shape = nullptr;
-		if (PFSpec && !PFSpec->BuildingClass.IsNull())
-		{
-			UClass* BuildingClass = PFSpec->BuildingClass.LoadSynchronous();
-			Shape = SeinExtentsHelpers::GetPrimaryExtentsShape(BuildingClass);
-		}
-
-		if (Shape)
-		{
-			const FSeinTargeterPoint& First = Payload->TargeterPoints[0];
-
-			// YawDegrees is the authoritative captured pose for both snapped and
-			// free rotation. RotationStep is only gesture/UI metadata.
-			const FFixedPoint YawDeg = First.YawDegrees;
-
-			// AgentLayerMask: blocking-perspective bit. We don't have an
-			// agent here (placing a building, not pathing through one).
-			// Use 0xFF "block on any layer" so any blocker rejects placement.
-			const uint8 AgentLayerMask = 0xFF;
-
-			if (!FootprintPlacementResolver.Execute(First.Location, YawDeg, *Shape, AgentLayerMask))
-			{
-				UE_LOG(LogSeinSim, Warning,
-					TEXT("BrokerOrder[%s]: footprint blocked at (%.1f, %.1f, %.1f) yaw=%.1f"),
-					*Payload->PredeterminedAbilityTag.ToString(),
-					First.Location.X.ToFloat(), First.Location.Y.ToFloat(), First.Location.Z.ToFloat(),
-					YawDeg.ToFloat());
-				RejectCommand(Cmd, SeinARTSTags::Command_Reject_FootprintBlocked);
-				return ECommandHandleResult::Handled;
-			}
-		}
-		// Else: ability requires footprint check but we couldn't resolve
-		// a shape — log Verbose and let the order through. Designer
-		// either forgot to set BuildingClass or the BP has no extents
-		// component; failing closed here would block legitimate-looking
-		// orders during authoring iteration.
-		else
-		{
-			UE_LOG(LogSeinSim, Verbose,
-				TEXT("BrokerOrder[%s]: bRequiresFreeFootprint set but no shape resolved (spec or BuildingClass missing); skipping gate."),
-				*Payload->PredeterminedAbilityTag.ToString());
-		}
+		UE_LOG(LogSeinSim, Warning, TEXT("BrokerOrder[%s]: footprint blocked"),
+			*Payload->PredeterminedAbilityTag.ToString());
+		RejectCommand(Cmd, SeinARTSTags::Command_Reject_FootprintBlocked);
+		return ECommandHandleResult::Handled;
 	}
-
 	FSeinBrokerQueuedOrder Order;
 	Order.Context = Payload->CommandContext;
 	Order.TargetEntity = Cmd.TargetEntity;
@@ -5227,6 +5212,7 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleBrokerOr
 	Order.GuidePoints = Payload->GuidePoints;
 	Order.FormationTag = Payload->FormationTag;
 	Order.TargeterPoints = Payload->TargeterPoints;
+	Order.ActivationInputs = Payload->ActivationInputs;
 	Order.PredeterminedAbilityTag = Payload->PredeterminedAbilityTag;
 	Order.DestinationArtifact = MoveTemp(CanonicalDestinationArtifact);
 
@@ -5638,6 +5624,17 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 	//   8. Record deducted cost snapshot + USeinAbility::ActivateAbility
 	//      (which handles cooldown start + GrantedTags grant + OnActivate)
 
+	if (!Cmd.ActivationInputs.IsEmpty() || !Ability->GetActivationInputNames().IsEmpty())
+	{
+		TStrongObjectPtr<USeinAbility> InputCandidate(NewObject<USeinAbility>(GetTransientPackage(), Ability->GetClass()));
+		FString InputError;
+		if (!Cmd.ActivationInputs.Decode(*InputCandidate, InputError))
+		{
+			RejectCommand(Cmd, SeinARTSTags::Command_Reject_CanActivateFailed);
+			return ECommandHandleResult::Handled;
+		}
+	}
+
 	// 1. Cooldown
 	if (Ability->IsOnCooldown())
 	{
@@ -5713,13 +5710,12 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 		{
 			// Member must have a Move ability to fulfill the prefix. If not,
 			// there's nothing to auto-move with — reject as OutOfRange.
-			// Move-ability lookup is via the bIsMoveAbility flag designer-set
-			// on the move ability (no hardcoded tag).
-			const USeinAbility* MoveAbility = AbilityComp->FindMoveAbility(*this);
+			// Movement explicitly selects the already-granted default ability.
+			const USeinAbility* MoveAbility = ResolveDefaultMoveAbility(Cmd.EntityHandle);
 			if (!MoveAbility || !MoveAbility->AbilityTag.IsValid())
 			{
 				UE_LOG(LogSeinSim, Verbose,
-					TEXT("ActivateAbility[%s]: AutoMoveThen requested but entity has no ability flagged as Move (bIsMoveAbility) with a valid tag; rejecting"),
+					TEXT("ActivateAbility[%s]: AutoMoveThen requested but entity has no usable granted Movement Ability; rejecting"),
 					*Cmd.AbilityTag.ToString());
 				RejectCommand(Cmd, SeinARTSTags::Command_Reject_OutOfRange);
 				return ECommandHandleResult::Handled;
@@ -5806,6 +5802,7 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 			Followup.TargetEntity = Cmd.TargetEntity;
 			Followup.TargetLocation = Cmd.TargetLocation;
 			Followup.TargetMembers = SingleMember;
+			Followup.ActivationInputs = Cmd.ActivationInputs;
 			Followup.bIsInternalPrefix = true;
 			Followup.DerivedResourcePayer = ResourcePayer;
 
@@ -5954,8 +5951,19 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 		}
 	}
 
+	// Recheck after broker dispatch / approach movement, before spending resources.
+	const bool bPlacementValid = SeinPlacementValidation::IsValidForAbility(*this, *Ability, Cmd.TargeterPoints);
+	if (!RefreshAbility()) return RejectRevokedAbility();
+	if (!bPlacementValid)
+	{
+		RejectCommand(Cmd, SeinARTSTags::Command_Reject_FootprintBlocked);
+		return ECommandHandleResult::Handled;
+	}
+
 	// 4. CanActivate escape hatch (after declarative validation)
-	const bool bCanActivate = Ability->CanActivate();
+	const bool bInputsAccepted = Ability->CanActivateWithInputs(Cmd.ActivationInputs);
+	if (!RefreshAbility()) return RejectRevokedAbility();
+	const bool bCanActivate = bInputsAccepted && Ability->CanActivate();
 	if (!RefreshAbility())
 	{
 		return RejectRevokedAbility();
@@ -6094,6 +6102,15 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 	{
 		return RefundAndRejectRevoked();
 	}
+	// Cancellation/eligibility callbacks may have placed another entity since preflight.
+	const bool bPlacementStillValid = SeinPlacementValidation::IsValidForAbility(*this, *Ability, Cmd.TargeterPoints);
+	if (!RefreshAbility()) return RefundAndRejectRevoked();
+	if (!bPlacementStillValid)
+	{
+		USeinResourceBPFL::SeinRefund(this, ResourcePayer, ActivationCost);
+		RejectCommand(Cmd, SeinARTSTags::Command_Reject_FootprintBlocked);
+		return ECommandHandleResult::Handled;
+	}
 	Ability->RecordDeductedCost(ActivationCost);
 	Ability->RecordPendingCompletionCost(PendingCompletionCost);
 	Ability->RecordResourcePayer(ResourcePayer);
@@ -6101,11 +6118,11 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleActivate
 	if (Cmd.TargeterPoints.Num() > 0)
 	{
 		bActivated = Ability->ActivateAbilityWithTargeterPoints(
-			Cmd.TargetEntity, Cmd.TargetLocation, Cmd.TargeterPoints);
+			Cmd.TargetEntity, Cmd.TargetLocation, Cmd.TargeterPoints, Cmd.ActivationInputs);
 	}
 	else
 	{
-		bActivated = Ability->ActivateAbility(Cmd.TargetEntity, Cmd.TargetLocation);
+		bActivated = Ability->ActivateAbility(Cmd.TargetEntity, Cmd.TargetLocation, Cmd.ActivationInputs);
 	}
 	const bool bAbilityStillOwned = RefreshAbility();
 	if (!bActivated)
@@ -6180,6 +6197,23 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleCancelPr
 	const int32 CancelIdx = Cmd.QueueIndex;
 	if (CancelIdx < 0 || CancelIdx >= ProdComp->Queue.Num()) { RejectCommand(Cmd, SeinARTSTags::Command_Reject_InvalidTarget); return ECommandHandleResult::Handled; }
 
+	CancelProduction(Cmd.EntityHandle, CancelIdx);
+	return ECommandHandleResult::Handled;
+}
+
+bool USeinWorldSubsystem::CancelProduction(FSeinEntityHandle Producer, int32 QueueIndex)
+{
+	if (!RequireStateMutationAuthorization(TEXT("CancelProduction")))
+	{
+		return false;
+	}
+	FSeinProductionPayload* ProdComp = GetComponentMutable<FSeinProductionPayload>(Producer);
+	if (!ProdComp || !ProdComp->Queue.IsValidIndex(QueueIndex))
+	{
+		return false;
+	}
+	const int32 CancelIdx = QueueIndex;
+
 	// Refund AtEnqueueCost only (AtCompletion was never deducted). Policy
 	// chooses between progress-proportional (default) and flat-custom.
 	const FSeinPlayerID ResourcePayer = ProdComp->Queue[CancelIdx].ResourcePayer;
@@ -6224,7 +6258,7 @@ USeinWorldSubsystem::ECommandHandleResult USeinWorldSubsystem::TryHandleCancelPr
 		ProdComp->bStalledAtCompletion = false;
 	}
 
-	return ECommandHandleResult::Handled;
+	return true;
 }
 
 void USeinWorldSubsystem::SetAIEmitInterceptor(
@@ -6584,10 +6618,15 @@ bool USeinWorldSubsystem::CanCommandControlEntity(
 
 // ==================== Entity Management ====================
 
-FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
+FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(TSubclassOf<ASeinActor> ActorClass,
+	const FFixedTransform& SpawnTransform, FSeinPlayerID OwnerPlayerID)
+{
+	return SpawnEntityWithConstruction(ActorClass, SpawnTransform, OwnerPlayerID, nullptr);
+}
+FSeinEntityHandle USeinWorldSubsystem::SpawnEntityWithConstruction(
 	TSubclassOf<ASeinActor> ActorClass,
 	const FFixedTransform& SpawnTransform,
-	FSeinPlayerID OwnerPlayerID)
+	FSeinPlayerID OwnerPlayerID, const ESeinConstructionInitialState* InitialConstruction)
 {
 	if (!RequireStateMutationAuthorization(TEXT("SpawnEntity")))
 	{
@@ -6609,6 +6648,25 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 		return FSeinEntityHandle::Invalid();
 	}
 
+	// Explicit construction-site spawning requires a valid authored recipe before allocating an entity.
+	if (InitialConstruction)
+	{
+		if (*InitialConstruction != ESeinConstructionInitialState::Queued
+			&& *InitialConstruction != ESeinConstructionInitialState::Building)
+			return FSeinEntityHandle::Invalid();
+		TArray<const USeinEntityBridgeComponent*> Bridges;
+		AActor::GetActorClassDefaultComponents<USeinEntityBridgeComponent>(ActorClass, Bridges);
+		bool bHasRecipe = false;
+		if (!Bridges.IsEmpty() && Bridges[0])
+		{
+			for (const FInstancedStruct& Entry : Bridges[0]->ComponentData)
+			{
+				if (const auto* Recipe = Entry.GetPtr<FSeinConstructionPayload>())
+					bHasRecipe = true;
+			}
+		}
+		if (!bHasRecipe) return FSeinEntityHandle::Invalid();
+	}
 	// Degenerate-scale guard. A zero scale component is never a legitimate
 	// spawn input, but it fails SILENTLY: the entity is fully functional in
 	// the sim (movement/collision/extents never read scale) while the bridge
@@ -6676,18 +6734,17 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 	}
 	ApplyComponentClassDefaultOverlaysToEntity(Handle, ActorClass);
 
-	// Instantiate ability UObjects if the entity was granted any
-	InitializeEntityAbilities(Handle);
+
 
 	// Initialize the entity's tag state. Seed BaseTags from the entity bridge's
 	// authored BaseTags UPROPERTY, merge the FSeinIdentityPayload identity
 	// tag, then seed refcounts + the global EntityTagIndex. An active
-	// construction component receives a separate framework-owned grant so
+	// queued construction job receives a separate framework-owned grant so
 	// completion can release it without mutating designer-authored BaseTags.
 	//
 	// The matching ungrant lives in SeinFinishConstruction. If a designer also
 	// authors UnderConstruction in BaseTags, that independent grant persists.
-	const bool bHasConstructionComponent = GetComponent<FSeinConstructionPayload>(Handle) != nullptr;
+
 	{
 		FSeinEntityTagState& TagState = EntityTagStates.FindOrAdd(Handle);
 
@@ -6716,10 +6773,10 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 			}
 		}
 		SeedEntityTagsFromBase(Handle);
-		if (bHasConstructionComponent)
-		{
-			GrantTag(Handle, SeinARTSTags::State_UnderConstruction);
-		}
+		// Create the render actor before construction notifications are dispatched.
+		EnqueueVisualEvent(FSeinVisualEvent::MakeSpawnEvent(Handle, SafeTransform.GetLocation()));
+		USeinConstructionBPFL::InitializeAtSpawn(*this, Handle, InitialConstruction);
+		InitializeEntityAbilities(Handle);
 
 		// AFTER tag seeding — replay any active player-scope effects that
 		// grant abilities to entities matching this entity's tag state.
@@ -6727,22 +6784,6 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntity(
 		// the new unit picks up unlocked abilities at spawn instead of
 		// being permanently stuck without them.
 		ReplayEffectAbilityGrants(Handle);
-	}
-
-	// Fire spawn visual event. The actor bridge processes EntitySpawned first
-	// (creates the bridged actor), THEN downstream events for the same entity
-	// land on its now-live ACs. Order matters — we enqueue spawn before the
-	// optional construction-state event so the construction AC exists by the
-	// time the construction event reaches it.
-	EnqueueVisualEvent(FSeinVisualEvent::MakeSpawnEvent(Handle, SafeTransform.GetLocation()));
-
-	// Construction-state notification — drives the placement-visual swap on the
-	// bridged actor's USeinConstructionRenderComponent. Only fired when the entity
-	// actually carries a construction component (which is also what drove the
-	// auto-grant above). Symmetric with the un-grant + event in SeinFinishConstruction.
-	if (bHasConstructionComponent)
-	{
-		EnqueueVisualEvent(FSeinVisualEvent::MakeConstructionStateChangedEvent(Handle, /*bUnderConstruction=*/true));
 	}
 
 	UE_LOG(LogSeinSim, Verbose, TEXT("Spawned entity %s from %s (owner: %s)"),
@@ -6834,9 +6875,9 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntityFromPlacedActor(
 	ApplyComponentClassDefaultOverlaysToEntity(
 		Handle, PlacedActor->GetClass());
 
-	InitializeEntityAbilities(Handle);
 
-	const bool bHasConstructionComponent = GetComponent<FSeinConstructionPayload>(Handle) != nullptr;
+
+
 	{
 		// Initialize tag state — mirror of SpawnEntity's path. Seeds BaseTags
 		// from the LIVE placed actor's entity bridge (per-instance edits to
@@ -6858,10 +6899,8 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntityFromPlacedActor(
 			}
 		}
 		SeedEntityTagsFromBase(Handle);
-		if (bHasConstructionComponent)
-		{
-			GrantTag(Handle, SeinARTSTags::State_UnderConstruction);
-		}
+		USeinConstructionBPFL::InitializeAtSpawn(*this, Handle);
+		InitializeEntityAbilities(Handle);
 
 		// AFTER tag seeding — replay any active player-scope effects that
 		// grant abilities to entities matching this entity's tag state.
@@ -6869,19 +6908,6 @@ FSeinEntityHandle USeinWorldSubsystem::SpawnEntityFromPlacedActor(
 		// the new unit picks up unlocked abilities at spawn instead of
 		// being permanently stuck without them.
 		ReplayEffectAbilityGrants(Handle);
-	}
-
-	// Deliberately NO EntitySpawned visual event — placed actors already exist
-	// in the world; firing EntitySpawned would make the actor bridge spawn a
-	// second render actor in addition to the one the designer placed.
-	//
-	// ConstructionStateChanged IS safe to emit — it's a state notification
-	// dispatched to the existing actor's construction AC (mesh swap), no
-	// extra actor spawn. Designers placing under-construction stubs in the
-	// editor get correct preview visuals at PIE start.
-	if (bHasConstructionComponent)
-	{
-		EnqueueVisualEvent(FSeinVisualEvent::MakeConstructionStateChangedEvent(Handle, /*bUnderConstruction=*/true));
 	}
 
 	// Verbose: large maps register dozens of placed actors at travel time;
@@ -7299,6 +7325,17 @@ void USeinWorldSubsystem::SetEntityOwner(FSeinEntityHandle Handle, FSeinPlayerID
 	if (!Entity || !Entity->IsAlive()) return;
 	const FSeinPlayerID OldOwner = GetEntityOwner(Handle);
 	if (OldOwner == NewOwner) return;
+
+	// Ownership changes cancel pending production before any transfer callback.
+	// Cancel waiting entries from the back so the original front keeps its progress
+	// until its progress-proportional refund is calculated.
+	if (const auto* Production = GetComponent<FSeinProductionPayload>(Handle))
+	{
+		for (int32 Index = Production->Queue.Num() - 1; Index >= 0; --Index)
+		{
+			CancelProduction(Handle, Index);
+		}
+	}
 
 	check(OwnerTransitionDepth < MAX_int32);
 	TGuardValue<int32> OwnerTransitionGuard(
@@ -8013,6 +8050,30 @@ USeinAbility* USeinWorldSubsystem::GetAbilityInstance(int32 AbilityID) const
 	return PoolGet(AbilityPool, AbilityID);
 }
 
+USeinAbility* USeinWorldSubsystem::ResolveDefaultMoveAbility(FSeinEntityHandle Entity) const
+{
+	const FSeinMovementPayload* Movement = GetComponent<FSeinMovementPayload>(Entity);
+	const FSeinAbilityPayload* Abilities = GetComponent<FSeinAbilityPayload>(Entity);
+	if (!Movement || !Movement->DefaultMoveAbility || !Abilities) return nullptr;
+	for (int32 ID : Abilities->AbilityInstanceIDs)
+	{
+		USeinAbility* Ability = GetAbilityInstance(ID);
+		if (Ability && Ability->GetClass() == Movement->DefaultMoveAbility.Get())
+		{
+			if (Ability->bIsPassive || Ability->TargetType != ESeinAbilityTargetType::Point
+				|| !Ability->AbilityTag.IsValid()) return nullptr;
+			// Orders carry tags. Reject an ambiguous tag rather than dispatching
+			// another grant when the order is eventually activated.
+			for (int32 OtherID : Abilities->AbilityInstanceIDs)
+			{
+				const USeinAbility* Other = GetAbilityInstance(OtherID);
+				if (Other && Other != Ability && Other->AbilityTag == Ability->AbilityTag) return nullptr;
+			}
+			return Ability;
+		}
+	}
+	return nullptr;
+}
 int32 USeinWorldSubsystem::FindAbilityInstanceID(
 	const USeinAbility* Ability) const
 {
@@ -9338,6 +9399,11 @@ namespace
 		}
 
 		TMap<FSeinEntityHandle, FSeinSquadPayload> Squads;
+		if (!DecodeSnapshotComponentBlob<FSeinProductionHistoryPayload>(Snapshot, AliveHandleBySlot,
+			[](int32, const FSeinProductionHistoryPayload& History) { return History.State.IsValid(); }))
+		{
+			return false;
+		}
 		TMap<FSeinEntityHandle, FSeinSquadMemberPayload> SquadMembers;
 		TMap<FSeinEntityHandle, FSeinCommandBrokerData> Brokers;
 		TMap<FSeinEntityHandle, FSeinBrokerMembershipData> BrokerMemberships;
@@ -9806,7 +9872,7 @@ namespace
 		for (const auto& Pair : Snapshot.PlayerStates)
 		{
 			const FSeinPlayerState& State = Pair.Value;
-			if (State.PlayerID != Pair.Key) return false;
+			if (State.PlayerID != Pair.Key || !State.ProductionPolicyState.IsValid()) return false;
 			for (const auto& RefCount : State.PlayerTagRefCounts)
 			{
 				if (!RefCount.Key.IsValid() || RefCount.Value <= 0
@@ -11510,6 +11576,8 @@ bool USeinWorldSubsystem::RestoreSnapshot(
 	{
 		if (USeinActorBridgeSubsystem* Bridge = W->GetSubsystem<USeinActorBridgeSubsystem>())
 		{
+			TGuardValue<bool> ReadOnlyGuard(bReadOnlyCallbackInProgress, true);
+			TGuardValue<bool> ObserverGuard(bObserverCallbackInProgress, true);
 			Bridge->ReconcileBridgeAfterRestore();
 		}
 	}
@@ -15038,6 +15106,7 @@ namespace
 		Hash = HashCombine(Hash, GetTypeHash(State.bReady));
 		Hash = HashCombine(Hash, GetTypeHash(State.bIsSpectator));
 		Hash = HashCombine(Hash, GetTypeHash(State.bIsAI));
+		Hash = HashCombine(Hash, State.ProductionPolicyState.ComputeHash());
 		HashTagMap(Hash, State.Resources,          [](const FFixedPoint& V) { return GetTypeHash(V); });
 		HashTagMap(Hash, State.ResourceCaps,       [](const FFixedPoint& V) { return GetTypeHash(V); });
 		HashTagMap(Hash, State.PlayerTagRefCounts, [](int32 V)              { return GetTypeHash(V); });
@@ -15600,9 +15669,8 @@ void USeinWorldSubsystem::ReplayEffectAbilityGrants(FSeinEntityHandle Handle)
 	// MUST be called AFTER `SeedEntityTagsFromBase` (or equivalent) — the
 	// AbilityTargetClassTag check reads the entity's tag state, which is
 	// only meaningful after BaseTags / identity tag have been seeded.
-	// InitializeEntityAbilities runs before tag seeding (so passives can
-	// fire OnActivate without depending on BaseTags being present), so we
-	// keep this as a SEPARATE post-seed step.
+	// InitializeEntityAbilities follows tag and construction initialization.
+	// Replay remains a separate step after the entity's authored abilities exist.
 	if (!Handle.IsValid()) return;
 
 	// AbilityComponent is the gate — entities without one can't hold

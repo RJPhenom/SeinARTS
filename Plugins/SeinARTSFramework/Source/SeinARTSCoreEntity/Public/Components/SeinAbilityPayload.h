@@ -160,15 +160,6 @@ struct SEINARTSCOREENTITY_API FSeinAbilityPayload : public FSeinPayload
 	/** Check whether this component has an ability with the given tag. */
 	bool HasAbilityWithTag(const USeinWorldSubsystem& World, const FGameplayTag& Tag) const;
 
-	/** Find the first ability instance on this entity flagged
-	 *  `bIsMoveAbility = true`, or nullptr if none. Linear walk — ability
-	 *  lists are short (typically <20). Used by the framework's auto-move
-	 *  plumbing instead of a hardcoded tag lookup. */
-	USeinAbility* FindMoveAbility(const USeinWorldSubsystem& World) const;
-
-	/** Convenience: true iff `FindMoveAbility` would return non-null. */
-	bool HasMoveAbility(const USeinWorldSubsystem& World) const;
-
 	/** Check whether this component holds an instance of the given class. */
 	bool HasAbilityOfClass(const USeinWorldSubsystem& World, const UClass* AbilityClass) const;
 

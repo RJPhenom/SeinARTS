@@ -454,8 +454,6 @@ function Get-QualifiedMatrixReceiptPath(
 		$InstallationDiagnostic.enabledProductionPlugins | Sort-Object)
 	$ExpectedDiagnosticProject = Join-Path $RepoRoot `
 		"Saved\ConsumerMatrix\$Profile\SeinConsumer.uproject"
-	$ExpectedManifestObject =
-		'/Game/SeinARTS/SeinSimulationContentManifest.SeinSimulationContentManifest'
 	if ([int]$InstallationDiagnostic.schemaVersion -ne 1 -or
 		[string]$InstallationDiagnostic.result -cne 'Passed' -or
 		[int]$InstallationDiagnostic.errorCount -ne 0 -or
@@ -467,8 +465,8 @@ function Get-QualifiedMatrixReceiptPath(
 			[System.StringComparison]::OrdinalIgnoreCase)) -or
 		[string]$InstallationDiagnostic.integrationMode -cne 'Release' -or
 		[string]$InstallationDiagnostic.cohortVersion -cne $Version -or
-		[string]$InstallationDiagnostic.simulationContentManifest -cne
-			$ExpectedManifestObject -or
+		[string]$InstallationDiagnostic.simulationContentMode -cne 'AutomaticCook' -or
+		[string]$Matrix.compatibilityMode -cne 'AutomaticCook' -or
 		$DiagnosticPlugins.Count -ne $ExpectedPlugins.Count -or
 		(@(Compare-Object $DiagnosticPlugins @($ExpectedPlugins | Sort-Object))).Count -ne 0 -or
 		[string]$Matrix.installationDiagnosticIntegrationMode -cne
@@ -1027,6 +1025,8 @@ foreach ($TestProfile in $ExpectedTestProfiles) {
 				TimeoutSeconds = 7200
 				EngineRoot = $EngineRoot
 				QuietBuild = $true
+                # Integration includes Canvas pixel assertions that require a real RHI.
+                KeepRendering = ($CurrentSuite -eq 'SeinARTS.Integration')
                 ResultFile = $ExactTestResult
 			}
 			if ($SkipBuildForSuite) {

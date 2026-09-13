@@ -22,7 +22,7 @@ In `Content/Demo/Blueprints`, right-click and choose **Blueprint Class**. Expand
 
 Compile and save each Blueprint. These are ordinary Blueprint subclasses of the named native gameplay classes, not unit/entity assets.
 
-The camera parent already creates its pivot, spring arm, and camera components. Keep those inherited components. Under **Class Defaults**, keep **Default Zoom Distance** at `2000` and **Camera Pitch** at `-50` for the initial scene.
+The camera parent already creates its pivot, spring arm, and camera components.
 
 The inherited HUD draws the selection marquee without a Widget Blueprint. You will create the resource and action panels when their gameplay data exists.
 
@@ -56,7 +56,7 @@ Create an `Input` folder inside `Content/Demo/Blueprints` for the input assets. 
 | `IA_KeyModifier_Ctrl` | Digital (bool) |
 | `IA_KeyModifier_Alt` | Digital (bool) |
 
-Leave the actions' Triggers arrays empty for these basic bindings. Save the assets.
+Save the assets.
 
 ## 4. Create the Input Mapping Context
 

@@ -7,6 +7,7 @@
 
 #include "CoreGlobals.h"                       // GFrameCounter
 #include "UObject/UObjectIterator.h"
+#include "UObject/Package.h"
 #include "StructUtils/UserDefinedStruct.h"
 #include "Components/SeinPayload.h"
 #include "Components/SeinComponentEligibility.h"
@@ -35,6 +36,8 @@ namespace
 		{
 			UScriptStruct* S = *It;
 			if (!S || S == Base) continue;
+			if (S->IsA<UUserDefinedStruct>() && (S->GetOutermost() == GetTransientPackage()
+				|| !S->HasAnyFlags(RF_Public | RF_Standalone))) continue;
 			if (SeinComponentEligibility::IsEntityComponentStruct(S))
 			{
 				GCachedCandidates.Add(S);
@@ -63,8 +66,8 @@ void SeinComponentNodeMenu::GetCandidateStructs(TArray<UScriptStruct*>& Out)
 {
 	// Rebuild on the first call of a new frame; reuse within the same frame (the
 	// two nodes are visited within one synchronous action-DB rebuild). Every
-	// distinct rebuild lands on a later frame, so the set is always re-derived
-	// from the live object graph — identical output to an unconditional scan.
+	// explicit component lifecycle refresh also resets the cache so it sees
+	// new types even if an earlier menu scan occurred in this frame.
 	if (!GCacheValid || GCacheFrame != GFrameCounter)
 	{
 		RebuildCandidates();

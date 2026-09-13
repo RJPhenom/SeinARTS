@@ -8,6 +8,10 @@
 
 #include "Abilities/SeinAbility.h"
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/AssetRegistryHelpers.h"
+#include "Engine/Blueprint.h"
+#include "Engine/BlueprintGeneratedClass.h"
+#include "HAL/PlatformProperties.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Blueprint/BlueprintSupport.h"
 #include "Brokers/SeinCommandBrokerResolver.h"
@@ -313,6 +317,22 @@ namespace
 		default:
 			return nullptr;
 		}
+	}
+
+	UClass* ResolveBlueprintClass(const FAssetData& Asset)
+	{
+		if (Asset.IsInstanceOf(UBlueprintGeneratedClass::StaticClass(), EResolveClass::Yes))
+			return Cast<UClass>(Asset.GetAsset());
+		if (!Asset.IsInstanceOf(UBlueprint::StaticClass(), EResolveClass::Yes)) return nullptr;
+		if (FPlatformProperties::RequiresCookedData())
+		{
+			// Some cooked registries retain the source Blueprint asset entry,
+			// although only its generated class export survives. This is the
+			// class-name convention used by UBlueprint::GetBlueprintClassNames.
+			return LoadObject<UClass>(nullptr, *(Asset.GetObjectPathString() + TEXT("_C")));
+		}
+		const UBlueprint* Blueprint = Cast<UBlueprint>(Asset.GetAsset());
+		return Blueprint ? Blueprint->GeneratedClass.Get() : nullptr;
 	}
 
 	bool IsConcreteClass(const UClass* Class)
@@ -1036,8 +1056,15 @@ namespace
 			Admitted.ClassSchemaDigest =
 				Provider.DescriptorDigest;
 		}
+		FGuid ActivationSchema;
+		if (ExactClass.IsChildOf(USeinAbility::StaticClass())
+			&& !FSeinAbilityActivationInputs::ComputeSchemaDigest(&ExactClass, ActivationSchema, OutError))
+		{
+			Data.Classes.Pop();
+			return false;
+		}
 		FSeinCanonicalDigestWriter RootContractWriter(
-			TEXT("SeinARTS.PoolObject.RootClassContract"), 1);
+			TEXT("SeinARTS.PoolObject.RootClassContract"), 2);
 		if (!RootContractWriter.WriteUInt8(
 				static_cast<uint8>(Kind))
 			|| !RootContractWriter.WriteString(Path)
@@ -1045,6 +1072,7 @@ namespace
 				Provider.DescriptorDigest)
 			|| !RootContractWriter.WriteGuid(
 				Admitted.ClassSchemaDigest)
+			|| !RootContractWriter.WriteGuid(ActivationSchema)
 			|| !RootContractWriter.Finalize(
 				Admitted.RootClassContractDigest,
 				OutError))
@@ -1491,6 +1519,58 @@ FSeinPoolObjectCodecRegistry::CaptureManifest(
 	// scan here rather than producing a manifest that cannot checkpoint the live
 	// objects the same profile is allowed to spawn.
 	AssetRegistry.WaitForCompletion();
+	if (FSeinSimulationContentManifestCodec::IsEditorSessionProfile(ContentProfile))
+	{
+		// Freeze class schemas without requiring saved-package evidence. Resolve
+		// current generated classes so unsaved creation/reparenting works too.
+		if (!FPlatformProperties::RequiresCookedData() && !AssetRegistry.IsSearchAllAssets())
+			AssetRegistry.SearchAllAssets(true);
+		TArray<FTopLevelAssetPath> Anchors;
+		for (const auto& Provider : Data->Providers)
+			if (Provider.Descriptor.bAllowBlueprintChildren)
+				Anchors.Add(Provider.Descriptor.NativeAnchor->GetClassPathName());
+		TArray<FAssetData> Candidates;
+		UAssetRegistryHelpers::GetDerivedClassAssetData(Anchors, Candidates);
+		TSet<UClass*> Classes;
+		for (const FAssetData& Asset : Candidates)
+		{
+			UClass* Class = ResolveBlueprintClass(Asset);
+			if (!Class)
+			{
+				SetError(OutError, FString::Printf(TEXT("Cannot load pool Blueprint '%s'."), *Asset.GetObjectPathString()));
+				return {};
+			}
+			Classes.Add(Class);
+		}
+#if WITH_EDITOR
+		for (TObjectIterator<UBlueprint> It; It; ++It)
+			if (It->IsAsset()) Classes.Add(It->GeneratedClass);
+#endif
+		for (UClass* Class : Classes)
+		{
+			if (!IsConcreteClass(Class) || !Class->HasAnyClassFlags(CLASS_CompiledFromBlueprint)
+				|| Class->HasAnyFlags(RF_Transient)) continue;
+			const UClass* Anchor = FindNearestNativeAnchor(Class);
+			const int32* Provider = Anchor ? BlueprintProviderByNativeAnchor.Find(Anchor->GetPathName()) : nullptr;
+			if (!Provider) continue;
+#if WITH_EDITOR
+			if (UBlueprint* Blueprint = Cast<UBlueprint>(Class->ClassGeneratedBy))
+			{
+				if (Blueprint->GeneratedClass != Class) continue;
+				if (Blueprint->bBeingCompiled || Blueprint->bIsRegeneratingOnLoad || !Blueprint->IsUpToDate())
+				{
+					SetError(OutError, FString::Printf(TEXT("Compile Blueprint '%s' before starting simulation."), *Blueprint->GetPathName()));
+					return {};
+				}
+			}
+#endif
+			if (!AddAdmittedClass(*Data, *Class, Data->Providers[*Provider].Descriptor.Kind, *Provider, 0, Error))
+			{
+				SetError(OutError, MoveTemp(Error));
+				return {};
+			}
+		}
+	}
 	TSet<FString> SynchronouslyScannedPackagePaths;
 	TSet<FString> SeenGeneratedClassPaths;
 	for (const FSeinSimulationContentRecord& Record :
@@ -1509,8 +1589,10 @@ FSeinPoolObjectCodecRegistry::CaptureManifest(
 			Assets,
 			true,
 			false);
-		if (Assets.IsEmpty())
+		if (Assets.IsEmpty() && !FPlatformProperties::RequiresCookedData())
 		{
+			// Never disk-scan cooked IoStore packages: their virtualized exports
+			// are represented by the serialized registry, not loose source files.
 			// Editor -game starts before plugin content is necessarily present in
 			// the registry's searched roots. The content profile itself is the
 			// bounded allow-list, so synchronously scan only the missing record's
@@ -1536,51 +1618,29 @@ FSeinPoolObjectCodecRegistry::CaptureManifest(
 		}
 		for (const FAssetData& Asset : Assets)
 		{
-			const FString NativeAnchorExport =
-				Asset.GetTagValueRef<FString>(
-					FBlueprintTags::NativeParentClassPath);
-			const FString NativeAnchorPath =
-				FPackageName::ExportTextPathToObjectPath(
-					NativeAnchorExport);
-			const int32* ProviderIndex =
-				BlueprintProviderByNativeAnchor.Find(
-					NativeAnchorPath);
-			if (!ProviderIndex)
+			// Cooked registry tag filters may omit both parent/generated-class
+			// tags. The validated record bounds package admission; resolve the
+			// actual Blueprint class to choose its registered native provider.
+			if (!Asset.IsInstanceOf(UBlueprint::StaticClass(), EResolveClass::Yes)
+				&& !Asset.IsInstanceOf(UBlueprintGeneratedClass::StaticClass(), EResolveClass::Yes)) continue;
+			UClass* GeneratedClass = ResolveBlueprintClass(Asset);
+			if (!GeneratedClass)
 			{
-				continue;
+				SetError(OutError, FString::Printf(TEXT("Locally declared Blueprint '%s' could not be loaded."), *Asset.GetObjectPathString()));
+				return {};
 			}
-			const FString GeneratedExport =
-				Asset.GetTagValueRef<FString>(
-					FBlueprintTags::GeneratedClassPath);
-			const FString GeneratedPath =
-				FPackageName::ExportTextPathToObjectPath(
-					GeneratedExport);
-			if (GeneratedPath.IsEmpty()
-				|| SeenGeneratedClassPaths.Contains(GeneratedPath))
-			{
-				continue;
-			}
+			const UClass* NativeAnchor = FindNearestNativeAnchor(GeneratedClass);
+			const int32* ProviderIndex = NativeAnchor
+				? BlueprintProviderByNativeAnchor.Find(NativeAnchor->GetPathName()) : nullptr;
+			if (!ProviderIndex || GeneratedClass->HasAnyClassFlags(CLASS_Abstract)) continue;
+			const FString GeneratedPath = GeneratedClass->GetPathName();
+			if (SeenGeneratedClassPaths.Contains(GeneratedPath)) continue;
 			SeenGeneratedClassPaths.Add(GeneratedPath);
-			UClass* GeneratedClass =
-				LoadObject<UClass>(nullptr, *GeneratedPath);
-			if (!GeneratedClass
-				|| GeneratedClass->GetPathName() != GeneratedPath
-				|| !GeneratedClass->HasAnyClassFlags(
-					CLASS_CompiledFromBlueprint)
-				|| !AddAdmittedClass(
-					*Data,
-					*GeneratedClass,
-					Data->Providers[*ProviderIndex].Descriptor.Kind,
-					*ProviderIndex,
-					0,
-					Error))
+			if (!GeneratedClass->HasAnyClassFlags(CLASS_CompiledFromBlueprint)
+				|| !AddAdmittedClass(*Data, *GeneratedClass,
+					Data->Providers[*ProviderIndex].Descriptor.Kind, *ProviderIndex, 0, Error))
 			{
-				if (Error.IsEmpty())
-				{
-					Error = FString::Printf(
-						TEXT("Locally declared pool Blueprint '%s' could not be loaded or admitted."),
-						*GeneratedPath);
-				}
+				if (Error.IsEmpty()) Error = FString::Printf(TEXT("Locally declared pool Blueprint '%s' could not be admitted."), *GeneratedPath);
 				SetError(OutError, MoveTemp(Error));
 				return {};
 			}

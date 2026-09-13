@@ -478,54 +478,10 @@ if ($ProjectJson -and $ProjectRoot) {
 		$DefaultGameIni `
 		'/Script/SeinARTSCoreEntity.SeinARTSCoreSettings' `
 		'SimulationContentManifest'
-	if (-not $ManifestPath) {
-		Add-SeinFinding 'Error' 'SEIN050' `
-			'Config/DefaultGame.ini does not configure SimulationContentManifest.' `
-			'Create a project-owned manifest asset and assign it in SeinARTS Core project settings.'
-	}
-	elseif (-not $ManifestPath.StartsWith('/Game/', [System.StringComparison]::Ordinal)) {
-		Add-SeinFinding 'Error' 'SEIN051' `
-			"SimulationContentManifest '$ManifestPath' is not project-owned under /Game/." `
-			'Point the setting at a manifest asset in the consuming project Content directory.'
-	}
-	else {
-		$PackagePath = ($ManifestPath -split '\.', 2)[0]
-		$RelativePackagePath = $PackagePath.Substring(6)
-		$Segments = @($RelativePackagePath.Split('/'))
-		$ContentRoot = [System.IO.Path]::GetFullPath(
-			(Join-Path $ProjectRoot 'Content')).TrimEnd('\', '/')
-		$ManifestFile = $null
-		if (-not $RelativePackagePath -or
-			$ManifestPath.Contains('\') -or
-			@($Segments | Where-Object { -not $_ -or $_ -in @('.', '..') }).Count -gt 0) {
-			Add-SeinFinding 'Error' 'SEIN054' `
-				"SimulationContentManifest '$ManifestPath' is not a canonical /Game/ asset path." `
-				'Choose a project content asset without traversal or empty path segments.'
-		}
-		else {
-			$RelativeAssetPath = $RelativePackagePath.Replace(
-				'/', [string][System.IO.Path]::DirectorySeparatorChar) + '.uasset'
-			$ManifestFile = [System.IO.Path]::GetFullPath(
-				(Join-Path $ContentRoot $RelativeAssetPath))
-			if (-not $ManifestFile.StartsWith(
-					$ContentRoot + [System.IO.Path]::DirectorySeparatorChar,
-					[System.StringComparison]::OrdinalIgnoreCase)) {
-				Add-SeinFinding 'Error' 'SEIN054' `
-					"SimulationContentManifest '$ManifestPath' escapes the project Content directory." `
-					'Choose a project-owned asset beneath /Game/.'
-				$ManifestFile = $null
-			}
-		}
-		if ($ManifestFile -and -not (Test-Path -LiteralPath $ManifestFile -PathType Leaf)) {
-			Add-SeinFinding 'Error' 'SEIN052' `
-				"Configured simulation-content manifest is missing on disk: '$ManifestFile'." `
-				'Run Sein.SimulationContent.GenerateManifest in the Unreal Output Log, then save the asset.'
-		}
-		elseif ($ManifestFile) {
-			Add-SeinFinding 'Pass' 'SEIN053' `
-				"Configured project-owned simulation-content manifest exists at '$ManifestFile'."
-		}
-	}
+	# Saved manifests are optional strict-test recovery inputs, never an
+	# installation prerequisite. Cook owns release compatibility generation.
+	Add-SeinFinding 'Pass' 'SEIN050' `
+		'Simulation compatibility is generated automatically during cook; no saved manifest setup is required.'
 }
 
 $Errors = @($Findings | Where-Object { $_.severity -eq 'Error' })
@@ -540,6 +496,7 @@ $Report = [pscustomobject][ordered]@{
 	sourceCohortIdentity = $SourceCohortIdentity
 	enabledProductionPlugins = @($EnabledProductionPlugins | Sort-Object)
 	simulationContentManifest = $ManifestPath
+	simulationContentMode = 'AutomaticCook'
 	errorCount = $Errors.Count
 	warningCount = $Warnings.Count
 	findings = @($Findings)

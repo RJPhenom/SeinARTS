@@ -53,7 +53,6 @@ USeinCoverFrozenDestinationReplayMoveAbility::
 {
 	AbilityTag = SeinARTSTags::Command_Context_Target_Ground;
 	TargetType = ESeinAbilityTargetType::Point;
-	bIsMoveAbility = true;
 }
 
 void USeinCoverFrozenDestinationReplayMoveAbility::OnActivate_Implementation()
@@ -279,6 +278,7 @@ TEST(CoverFrozenBrokerOrderReplaysEveryReservationLifecycleTick,
 			Extents.Shapes.Add(Shape);
 			Source->AddComponent(Member, Extents);
 			FSeinMovementPayload Movement;
+			Movement.DefaultMoveAbility = USeinCoverFrozenDestinationReplayMoveAbility::StaticClass();
 			Movement.MovementClass = FSoftClassPath(
 				USeinBasicUnitMovement::StaticClass());
 			Movement.TopSpeed = FFixedPoint::FromInt(300);

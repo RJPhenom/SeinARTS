@@ -5,11 +5,17 @@
 
 #include "Serialization/SeinSimulationContentManifest.h"
 
+#include "HAL/IConsoleManager.h"
+#include "HAL/PlatformProperties.h"
 #include "Misc/PackageName.h"
 #include "Serialization/SeinCanonicalInitialStateDigest.h"
 
 namespace
 {
+	TAutoConsoleVariable<int32> CVarRequireFreshManifestForPIE(
+		TEXT("Sein.SimulationContent.RequireFreshManifestForPIE"), 0,
+		TEXT("Opt-in saved-content compatibility testing for uncooked editor sessions. Normal Play uses code-contract compatibility and never reads or writes a saved manifest."),
+		ECVF_Default);
 	constexpr TCHAR RecordDigestDomain[] =
 		TEXT("SeinARTS.SimulationContent.Record");
 	constexpr TCHAR ManifestRootDomain[] =
@@ -168,6 +174,52 @@ namespace
 		}
 		return Writer.Finalize(OutRootDigest, OutError);
 	}
+}
+
+bool FSeinSimulationContentManifestCodec::UsesEditorSessionCompatibility()
+{
+#if !UE_BUILD_SHIPPING
+	// Streaming development clients have no finalized cooked content set.
+	if (IsRunningCookOnTheFly()) return true;
+#endif
+	return !FPlatformProperties::RequiresCookedData()
+		&& CVarRequireFreshManifestForPIE.GetValueOnGameThread() == 0;
+}
+
+bool FSeinSimulationContentManifestCodec::IsEditorSessionProfile(
+	const FSeinSimulationContentManifestProfile& Profile)
+{
+	return Profile.Contributors.ContainsByPredicate([](const auto& Contributor)
+	{
+		return Contributor.StableContributorId == TEXT("sein.editor-session")
+			&& Contributor.ContributorRevision == 1
+			&& Contributor.DiscoveryContractDigest == FGuid(0x5365696e, 0x45444954, 0x4f525631, 0x00000001);
+	});
+}
+
+bool FSeinSimulationContentManifestCodec::BuildEditorSessionProfile(
+	TConstArrayView<FSeinSimulationContentContributorRecord> Contributors,
+	FSeinSimulationContentManifestProfile& OutProfile,
+	FString& OutError)
+{
+	OutProfile = {};
+	OutProfile.BuilderRevision = static_cast<int32>(CurrentBuilderRevision);
+	OutProfile.Contributors.Append(Contributors.GetData(), Contributors.Num());
+	for (const FSeinSimulationContentContributorRecord& Contributor : Contributors)
+	{
+		if (Contributor.StableContributorId.Equals(TEXT("sein.editor-session"), ESearchCase::IgnoreCase))
+		{
+			OutError = TEXT("sein.editor-session is reserved for editor compatibility mode.");
+			return false;
+		}
+	}
+	FSeinSimulationContentContributorRecord& Mode = OutProfile.Contributors.AddDefaulted_GetRef();
+	Mode.StableContributorId = TEXT("sein.editor-session");
+	Mode.ContributorRevision = 1;
+	// Frozen mode-domain signature. Even a records-free release profile cannot
+	// match editor evidence in bootstrap, replay, or snapshot digest checks.
+	Mode.DiscoveryContractDigest = FGuid(0x5365696e, 0x45444954, 0x4f525631, 0x00000001);
+	return SealProfile(CurrentFormatVersion, OutProfile, OutError);
 }
 
 bool USeinSimulationContentManifest::Validate(FString& OutError) const

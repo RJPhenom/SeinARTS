@@ -64,21 +64,6 @@ bool FSeinAbilityPayload::HasAbilityWithTag(const USeinWorldSubsystem& World, co
 	return FindAbilityByTag(World, Tag) != nullptr;
 }
 
-USeinAbility* FSeinAbilityPayload::FindMoveAbility(const USeinWorldSubsystem& World) const
-{
-	for (int32 ID : AbilityInstanceIDs)
-	{
-		USeinAbility* A = World.GetAbilityInstance(ID);
-		if (A && A->bIsMoveAbility) return A;
-	}
-	return nullptr;
-}
-
-bool FSeinAbilityPayload::HasMoveAbility(const USeinWorldSubsystem& World) const
-{
-	return FindMoveAbility(World) != nullptr;
-}
-
 bool FSeinAbilityPayload::HasAbilityOfClass(const USeinWorldSubsystem& World, const UClass* AbilityClass) const
 {
 	if (!AbilityClass) return false;

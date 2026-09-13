@@ -5,6 +5,7 @@
  */
 
 #include "Lib/SeinAbilityBPFL.h"
+#include "Lib/SeinAbilityInputBPFL.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Simulation/SeinWorldSubsystem.h"
@@ -117,6 +118,13 @@ void USeinAbilityBPFL::SeinIssueBrokerOrderFromEntity(
 	FFixedVector TargetLocation,
 	bool bQueueCommand)
 {
+	SeinIssueBrokerOrderWithInputs(WorldContextObject, CallerEntity, AbilityTag, TargetEntity, TargetLocation, {}, bQueueCommand);
+}
+
+void USeinAbilityBPFL::SeinIssueBrokerOrderWithInputs(const UObject* WorldContextObject,
+	FSeinEntityHandle CallerEntity, FGameplayTag AbilityTag, FSeinEntityHandle TargetEntity,
+	FFixedVector TargetLocation, const FSeinAbilityActivationInputs& Inputs, bool bQueueCommand)
+{
 	USeinWorldSubsystem* Subsystem = GetWorldSubsystem(WorldContextObject);
 	if (!Subsystem)
 	{
@@ -129,7 +137,7 @@ void USeinAbilityBPFL::SeinIssueBrokerOrderFromEntity(
 			TEXT("IssueBrokerOrderFromEntity rejected outside simulation context."));
 		return;
 	}
-	if (!AbilityTag.IsValid())
+	if (!AbilityTag.IsValid() || !Inputs.IsBounded())
 	{
 		UE_LOG(LogSeinBPFL, Warning, TEXT("IssueBrokerOrderFromEntity: invalid ability tag"));
 		return;
@@ -154,7 +162,7 @@ void USeinAbilityBPFL::SeinIssueBrokerOrderFromEntity(
 		UE_LOG(LogSeinBPFL, Log,
 			TEXT("IssueBrokerOrderFromEntity: caller %s has no broker — falling back to single-entity ActivateAbility[%s]"),
 			*CallerEntity.ToString(), *AbilityTag.ToString());
-		SeinIssueAbilityCommand(WorldContextObject, CallerEntity, AbilityTag, TargetEntity, TargetLocation);
+		USeinAbilityInputBPFL::IssueAbility(WorldContextObject, CallerEntity, AbilityTag, TargetEntity, TargetLocation, Inputs);
 		return;
 	}
 
@@ -166,7 +174,7 @@ void USeinAbilityBPFL::SeinIssueBrokerOrderFromEntity(
 		UE_LOG(LogSeinBPFL, Warning,
 			TEXT("IssueBrokerOrderFromEntity: caller %s membership points at broker %s but FSeinCommandBrokerData is missing — falling back to single-entity dispatch"),
 			*CallerEntity.ToString(), *BrokerHandle.ToString());
-		SeinIssueAbilityCommand(WorldContextObject, CallerEntity, AbilityTag, TargetEntity, TargetLocation);
+		USeinAbilityInputBPFL::IssueAbility(WorldContextObject, CallerEntity, AbilityTag, TargetEntity, TargetLocation, Inputs);
 		return;
 	}
 
@@ -180,6 +188,7 @@ void USeinAbilityBPFL::SeinIssueBrokerOrderFromEntity(
 	Order.PredeterminedAbilityTag = AbilityTag;
 	Order.TargetEntity = TargetEntity;
 	Order.TargetLocation = TargetLocation;
+	Order.ActivationInputs = Inputs;
 	Order.bIsInternalPrefix = false;
 
 	// Queue position: bQueueCommand=true appends after existing entries
@@ -931,7 +940,7 @@ FSeinAbilityAvailability USeinAbilityBPFL::SeinGetAbilityAvailability(
 			case ESeinAbilityTargetValidationResult::OutOfRange:
 			{
 				const USeinAbility* MoveAbility =
-					AbilityComp->FindMoveAbility(*Subsystem);
+					Subsystem->ResolveDefaultMoveAbility(EntityHandle);
 				if (Ability->OutOfRangeBehavior
 						!= ESeinOutOfRangeBehavior::AutoMoveThen
 					|| !MoveAbility || !MoveAbility->AbilityTag.IsValid())

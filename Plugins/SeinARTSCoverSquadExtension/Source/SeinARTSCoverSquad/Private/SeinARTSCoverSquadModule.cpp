@@ -50,6 +50,7 @@ void FSeinARTSCoverSquadModule::StartupModule()
 	}
 
 	FSeinSimulationContentContributorDescriptor ContentDescriptor;
+	ContentDescriptor.OwnerModule = TEXT("SeinARTSCoverSquad");
 	ContentDescriptor.StableContributorId = TEXT("seinarts.coversquad");
 	ContentDescriptor.ContributorRevision = 1;
 

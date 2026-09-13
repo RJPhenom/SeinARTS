@@ -47,7 +47,7 @@ public:
 	 *  here" and for UI feedback (out of range / no line of sight). When
 	 *  Eligible, Candidate carries the distance and score. */
 	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Combat",
-		meta = (WorldContext = "WorldContextObject", DisplayName = "Check Target"))
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Check Target", SeinDeterministic))
 	static ESeinTargetCheckResult SeinCheckTarget(
 		const UObject* WorldContextObject,
 		const FSeinTargetQuery& Query,

@@ -8,6 +8,7 @@
 
 #include "Abilities/SeinAbility.h"
 #include "Abilities/SeinTargeterSpec.h"
+#include "Effects/SeinEffect.h"
 #include "GameplayTagContainer.h"
 #include "UObject/UnrealType.h"
 
@@ -40,6 +41,10 @@ bool FSeinCanonicalStatePropertyPolicy::ShouldSkip(
 
 	const UStruct* Owner = Property.GetOwnerStruct();
 	const FName Name = Property.GetFName();
+	if (Owner == USeinEffect::StaticClass())
+	{
+		return Name == GET_MEMBER_NAME_CHECKED(USeinEffect, Icon);
+	}
 	if (Owner == USeinAbility::StaticClass())
 	{
 		return Name

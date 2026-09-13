@@ -17,6 +17,12 @@
 
 #pragma once
 
+class IDetailLayoutBuilder;
+namespace SeinAutoTagDetails
+{
+	void AddIdentityActions(IDetailLayoutBuilder& DetailBuilder);
+}
+
 #include "CoreMinimal.h"
 #include "IDetailCustomization.h"
 #include "IPropertyTypeCustomization.h"

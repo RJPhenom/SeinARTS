@@ -173,7 +173,6 @@ void ASeinActor::InitializeWithEntity(FSeinEntityHandle Handle)
 	}
 
 	EntityBridge->SetEntityHandle(Handle);
-
 	// Fire Blueprint event
 	ReceiveEntityInitialized();
 

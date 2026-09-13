@@ -187,6 +187,8 @@ FSeinVisualEvent FSeinVisualEvent::MakeConstructionStateChangedEvent(FSeinEntity
 	Event.PrimaryEntity = Entity;
 	// Encode state in Value: 1.0 = entering construction, 0.0 = leaving.
 	Event.Value = bUnderConstruction ? FFixedPoint::One : FFixedPoint::Zero;
+	Event.OldConstructionState = bUnderConstruction ? ESeinConstructionState::Complete : ESeinConstructionState::Building;
+	Event.NewConstructionState = bUnderConstruction ? ESeinConstructionState::Queued : ESeinConstructionState::Complete;
 	return Event;
 }
 

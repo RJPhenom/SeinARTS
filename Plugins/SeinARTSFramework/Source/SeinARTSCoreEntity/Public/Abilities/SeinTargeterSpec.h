@@ -68,7 +68,7 @@ enum class ESeinTargeterValidity : uint8
  * Subclasses add their own visualization parameters (radius, footprint ref,
  * line max length, etc.) that drive both preview rendering and client validation.
  */
-UCLASS(Abstract, EditInlineNew, Blueprintable, DefaultToInstanced)
+UCLASS(Abstract, EditInlineNew, Blueprintable, DefaultToInstanced, CollapseCategories)
 class SEINARTSCOREENTITY_API USeinTargeterSpec : public UObject
 {
 	GENERATED_BODY()
@@ -164,27 +164,10 @@ protected:
 };
 
 /**
- * Drag-rotate point-and-facing targeter — the building-placement spec.
- *
- * Capture flow:
- *   1. Player presses RMB on the world point where the building should land.
- *      The location is locked at this moment; subsequent mouse motion only
- *      affects rotation, not position.
- *   2. Mouse drag computes a direction vector from the locked point to the
- *      cursor; that vector's yaw is snapped to RotationStepDegrees and shown
- *      on the hologram.
- *   3. Player releases RMB to confirm. Captured point's RotationStep encodes
- *      which quantized step was chosen (0..StepCount-1).
- *   4. Releasing on a Blocked validity tint behaves per bRejectClickWhenBlocked
- *      — strict for buildings (eat the click), permissive for other uses.
- *
- * The spec references the building's Blueprint actor class via BuildingClass
- * (soft pointer). At Activate time the targeter pulls the CDO's extents
- * (USeinExtentsComponent + FSeinExtentsPayload) for footprint visualization and
- * validation; the preview reads the CDO's static mesh component for the
- * hologram. Designers can override the preview mesh per-spec via
- * PreviewMeshOverride when the runtime mesh is unsuitable for ghosting
- * (animated, multi-mesh assemblies, etc.).
+ * Captures a point and facing direction independently of the visual style.
+ * Press anchors the point; drag chooses facing; release captures the pose.
+ * Placement requirements live on the ability. Legacy actor/mesh fields remain
+ * available for existing assets until their authoring is migrated.
  */
 UCLASS(BlueprintType, EditInlineNew, meta = (DisplayName = "Point + Facing Targeter Spec"))
 class SEINARTSCOREENTITY_API USeinPointFacingTargeterSpec : public USeinTargeterSpec
@@ -203,7 +186,8 @@ public:
 	 *  Soft so the spec can live in CoreEntity and reference user-authored
 	 *  ASeinActor BPs in game content without forcing a hard load until the
 	 *  player triggers the ability. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Targeter")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, AdvancedDisplay, Category = "Compatibility",
+		meta=(DisplayName="Legacy Building Class"))
 	TSoftClassPtr<AActor> BuildingClass;
 
 	/** Quantization step for the captured rotation, in degrees.
@@ -231,7 +215,8 @@ public:
 	 *  Set this only when the runtime mesh is unsuitable for ghosting —
 	 *  e.g., the building has a skeletal mesh, a multi-component assembly,
 	 *  or a procedural mesh that costs too much to instance for preview. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Targeter")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, AdvancedDisplay, Category = "Compatibility",
+		meta=(DisplayName="Legacy Preview Mesh Override"))
 	TSoftObjectPtr<UStaticMesh> PreviewMeshOverride;
 
 protected:

@@ -12,8 +12,9 @@
  *
  *          NavDebug registers a per-view Canvas overlay for managed move
  *          actions. It shows remaining committed geometry, driver segment
- *          progress, targets, and captured motion in the current rendered
- *          frame. The custom Navigation flag also controls the cell proxy.
+ *          progress, targets, and the sim-pose offset in the current rendered
+ *          frame; heading and motion stay with the Steering view. The custom
+ *          Navigation flag also controls the cell proxy.
  *
  *          Shipping strip: ticker, console command, and helper draw functions
  *          are gated on UE_ENABLE_DEBUG_DRAWING. Shipping still registers the
@@ -273,7 +274,7 @@ namespace
 		const FPanel Panel(Canvas, EPanel::Extents);
 		if (!Panel.IsVisible()) return;
 		Panel.Text(8, World->IsGameWorld() ? TEXT("Extents: entity shapes | distance / view / shared-budget limited")
-			: TEXT("Extents: authored entity shapes | no distance or budget limit"), FLinearColor::White);
+			: TEXT("Extents: authored entity shapes | no distance or budget limit"), FLinearColor(1, 0.15f, 0.15f));
 		Panel.Text(24, TEXT("Red wire: boxes / capsules, including shape offsets, yaw and height"), FLinearColor(1, 0.15f, 0.15f));
 		Panel.Text(40, World->IsGameWorld() ? TEXT("Runtime data at simulation pose; depth-tested against the scene")
 			: TEXT("Editor: authored shapes at actor pose; depth-tested against the scene"), FLinearColor::White);
@@ -647,6 +648,7 @@ void FSeinARTSMovementModule::StartupModule()
 	SimulationContentRegistrationHandle.Reset();
 
 	FSeinSimulationContentContributorDescriptor ContentDescriptor;
+	ContentDescriptor.OwnerModule = TEXT("SeinARTSMovement");
 	ContentDescriptor.StableContributorId = TEXT("seinarts.movement");
 	ContentDescriptor.ContributorRevision = 1;
 	ContentDescriptor.DiscoveryRoots = {

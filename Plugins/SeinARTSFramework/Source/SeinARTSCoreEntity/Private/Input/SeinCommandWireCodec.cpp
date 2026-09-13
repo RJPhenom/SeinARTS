@@ -12,7 +12,7 @@ using namespace UE::Sein::CanonicalWirePrivate;
 namespace
 {
 	constexpr uint32 CommandMagic = 0x53434D44u; // SCMD
-	constexpr uint16 CommandWireVersion = 3;
+	constexpr uint16 CommandWireVersion = 4;
 	constexpr int32 MaxIdentifierBytes = 1024;
 
 	bool WriteVector(FWireWriter& Writer, const FFixedVector& Vector)
@@ -162,6 +162,12 @@ bool FSeinCommandWireCodec::EncodeWithCost(
 			return false;
 		}
 	}
+	const auto& Inputs = Command.ActivationInputs;
+	if (!ChargeNativeAllocation(Inputs.Data.Num())
+		|| !Writer.U32(Inputs.SchemaA) || !Writer.U32(Inputs.SchemaB)
+		|| !Writer.U32(Inputs.SchemaC) || !Writer.U32(Inputs.SchemaD)
+		|| !Writer.U32(static_cast<uint32>(Inputs.Data.Num()))
+		|| !Writer.Raw(Inputs.Data.GetData(), Inputs.Data.Num())) return false;
 	if (!Writer.I64(Command.AuxA.Value)
 		|| !Writer.I64(Command.AuxB.Value)
 		|| !Writer.U32(static_cast<uint32>(Command.EntityList.Num())))
@@ -313,6 +319,17 @@ bool FSeinCommandWireCodec::DecodeWithCost(
 			|| !Reader.U8(Point.RotationStep)
 			|| !Reader.I64(Point.YawDegrees.Value)) return false;
 	}
+
+	auto& Inputs = Candidate.ActivationInputs;
+	uint32 InputSize = 0;
+	if (!Reader.U32(Inputs.SchemaA) || !Reader.U32(Inputs.SchemaB)
+		|| !Reader.U32(Inputs.SchemaC) || !Reader.U32(Inputs.SchemaD)
+		|| !Reader.U32(InputSize) || InputSize > FSeinAbilityActivationInputs::MaxBytes
+		|| InputSize > static_cast<uint32>(Reader.Remaining())
+		|| !ChargeAllocation(InputSize)) return false;
+	TConstArrayView<uint8> InputView;
+	if (!Reader.Slice(static_cast<int32>(InputSize), InputView)) return false;
+	Inputs.Data.Append(InputView.GetData(), InputView.Num());
 
 	uint32 EntityCount = 0;
 	if (!Reader.I64(Candidate.AuxA.Value)

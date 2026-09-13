@@ -51,6 +51,8 @@ public:
 		const FString& Options,
 		const FString& Portal = TEXT("")) override;
 	virtual void Logout(AController* Exiting) override;
+	virtual void SwapPlayerControllers(APlayerController* OldPC, APlayerController* NewPC) override;
+	virtual void HandleSeamlessTravelPlayer(AController*& Controller) override;
 	virtual void HandleStartingNewPlayer_Implementation(
 		APlayerController* NewPlayer) override;
 
@@ -114,4 +116,5 @@ private:
 
 	/** Authority-only routing claims. They never create or mutate sim state. */
 	TMap<int32, TWeakObjectPtr<ASeinPlayerController>> ClaimedSlots;
+	TSet<TWeakObjectPtr<APlayerController>> RejectedSeamlessControllers;
 };

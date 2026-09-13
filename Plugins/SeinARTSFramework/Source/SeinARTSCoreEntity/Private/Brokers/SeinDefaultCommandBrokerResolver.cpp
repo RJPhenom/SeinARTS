@@ -444,6 +444,7 @@ FSeinBrokerDispatchPlan USeinDefaultCommandBrokerResolver::ResolveDispatch_Imple
 			MD.TargetEntity = Order.TargetEntity;
 			MD.TargetLocation = Order.TargetLocation;
 			MD.TargeterPoints = Order.TargeterPoints;
+			MD.ActivationInputs = Order.ActivationInputs;
 			Plan.MemberDispatches.Add(MD);
 		}
 		return Plan;

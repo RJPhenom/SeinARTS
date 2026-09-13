@@ -21,11 +21,17 @@
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_FunctionEntry.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Lib/MathBPFL.h"
+#include "Lib/SeinCombatBPFL.h"
+#include "Lib/SeinCombatMutationBPFL.h"
+#include "Lib/SeinResourceBPFL.h"
+#include "Lib/SeinProductionBPFL.h"
+#include "Lib/SeinSimMutationBPFL.h"
 #include "Lib/SeinTargeterBPFL.h"
 #include "Misc/DataValidation.h"
 #include "Movement/SeinBasicUnitMovement.h"
@@ -94,6 +100,148 @@ namespace UE::SeinARTSTests
 			Call->AllocateDefaultPins();
 			return Call;
 		}
+	}
+
+	TEST(CombatAndHarvestGuideNativeCallsPassValidation,
+		"SeinARTS.Editor.Blueprint.AbilityDeterminism")
+	{
+		using namespace AbilityDeterminismValidation;
+		UBlueprint* Blueprint = MakeAbilityBlueprint();
+		ASSERT_THAT(IsNotNull(Blueprint));
+		UEdGraph* Graph = FBlueprintEditorUtils::FindEventGraph(Blueprint);
+		ASSERT_THAT(IsNotNull(Graph));
+		const UFunction* Functions[] = {
+			USeinCombatBPFL::StaticClass()->FindFunctionByName(GET_FUNCTION_NAME_CHECKED(USeinCombatBPFL, SeinCheckTarget)),
+			USeinSimMutationBPFL::StaticClass()->FindFunctionByName(GET_FUNCTION_NAME_CHECKED(USeinSimMutationBPFL, SeinApplyFieldDelta)),
+			USeinCombatMutationBPFL::StaticClass()->FindFunctionByName(GET_FUNCTION_NAME_CHECKED(USeinCombatMutationBPFL, SeinNotifyDamageApplied)),
+			USeinCombatMutationBPFL::StaticClass()->FindFunctionByName(GET_FUNCTION_NAME_CHECKED(USeinCombatMutationBPFL, SeinNotifyDeath)),
+			USeinResourceBPFL::StaticClass()->FindFunctionByName(GET_FUNCTION_NAME_CHECKED(USeinResourceBPFL, SeinGrantIncome))
+		};
+		for (const UFunction* Function : Functions)
+		{
+			ASSERT_THAT(IsNotNull(Function));
+			AddCall(*Graph, *Function);
+		}
+		FDataValidationContext Context;
+		ASSERT_THAT(IsTrue(Validate(*Blueprint, Context) == EDataValidationResult::Valid));
+		ASSERT_THAT(AreEqual(0, Context.GetNumErrors()));
+	}
+
+	TEST(LocalHelperBodiesRemainSubjectToValidation,
+		"SeinARTS.Editor.Blueprint.AbilityDeterminism")
+	{
+		using namespace AbilityDeterminismValidation;
+		UBlueprint* Blueprint = MakeAbilityBlueprint();
+		ASSERT_THAT(IsNotNull(Blueprint));
+		UEdGraph* Helper = FBlueprintEditorUtils::CreateNewGraph(
+			Blueprint, TEXT("TryShot"), UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+		FBlueprintEditorUtils::AddFunctionGraph(Blueprint, Helper, true, static_cast<UFunction*>(nullptr));
+		FKismetEditorUtilities::CompileBlueprint(Blueprint);
+		UEdGraph* EventGraph = FBlueprintEditorUtils::FindEventGraph(Blueprint);
+		ASSERT_THAT(IsNotNull(EventGraph));
+		for (const UClass* Owner : { Blueprint->GeneratedClass, Blueprint->SkeletonGeneratedClass })
+		{
+			ASSERT_THAT(IsNotNull(Owner));
+			const UFunction* Function = Owner->FindFunctionByName(TEXT("TryShot"));
+			ASSERT_THAT(IsNotNull(Function));
+			AddCall(*EventGraph, *Function);
+		}
+		FDataValidationContext SafeContext;
+		ASSERT_THAT(IsTrue(Validate(*Blueprint, SafeContext) == EDataValidationResult::Valid));
+		ASSERT_THAT(AreEqual(0, SafeContext.GetNumErrors()));
+
+		const UFunction* RandomInteger = UKismetMathLibrary::StaticClass()->FindFunctionByName(
+			GET_FUNCTION_NAME_CHECKED(UKismetMathLibrary, RandomInteger));
+		ASSERT_THAT(IsNotNull(RandomInteger));
+		AddCall(*Helper, *RandomInteger);
+		FDataValidationContext UnsafeContext;
+		ASSERT_THAT(IsTrue(Validate(*Blueprint, UnsafeContext) == EDataValidationResult::Invalid));
+		// Only the unsafe body call is rejected, not the two helper call sites.
+		ASSERT_THAT(AreEqual(1, UnsafeContext.GetNumErrors()));
+	}
+
+	TEST(LocalHelperSignaturesUseDeterministicContainerRules,
+		"SeinARTS.Editor.Blueprint.AbilityDeterminism")
+	{
+		using namespace AbilityDeterminismValidation;
+		for (const bool bUnsafe : { false, true })
+		{
+			UBlueprint* Blueprint = MakeAbilityBlueprint();
+			ASSERT_THAT(IsNotNull(Blueprint));
+			UEdGraph* Helper = FBlueprintEditorUtils::CreateNewGraph(
+				Blueprint, TEXT("TryShot"), UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+			FBlueprintEditorUtils::AddFunctionGraph(Blueprint, Helper, true, static_cast<UFunction*>(nullptr));
+			TArray<UK2Node_FunctionEntry*> Entries;
+			Helper->GetNodesOfClass(Entries);
+			ASSERT_THAT(AreEqual(1, Entries.Num()));
+			FEdGraphPinType Type = FixedPointPinType();
+			if (bUnsafe)
+			{
+				Type = FEdGraphPinType();
+				Type.PinCategory = UEdGraphSchema_K2::PC_Real;
+				Type.PinSubCategory = UEdGraphSchema_K2::PC_Float;
+			}
+			Type.ContainerType = EPinContainerType::Array;
+			ASSERT_THAT(IsNotNull(Entries[0]->CreateUserDefinedPin(TEXT("Values"), Type, EGPD_Output)));
+			FKismetEditorUtilities::CompileBlueprint(Blueprint);
+			const UFunction* Function = Blueprint->SkeletonGeneratedClass->FindFunctionByName(TEXT("TryShot"));
+			ASSERT_THAT(IsNotNull(Function));
+			UEdGraph* EventGraph = FBlueprintEditorUtils::FindEventGraph(Blueprint);
+			ASSERT_THAT(IsNotNull(EventGraph));
+			AddCall(*EventGraph, *Function);
+			FDataValidationContext Context;
+			const EDataValidationResult Expected = bUnsafe ? EDataValidationResult::Invalid : EDataValidationResult::Valid;
+			ASSERT_THAT(IsTrue(Validate(*Blueprint, Context) == Expected));
+			ASSERT_THAT(AreEqual(bUnsafe ? 1 : 0, Context.GetNumErrors()));
+		}
+	}
+
+	TEST(LocalHelperFloatStorageIsRejected,
+		"SeinARTS.Editor.Blueprint.AbilityDeterminism")
+	{
+		using namespace AbilityDeterminismValidation;
+		UBlueprint* Blueprint = MakeAbilityBlueprint();
+		ASSERT_THAT(IsNotNull(Blueprint));
+		UEdGraph* Helper = FBlueprintEditorUtils::CreateNewGraph(
+			Blueprint, TEXT("TryShot"), UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+		FBlueprintEditorUtils::AddFunctionGraph(Blueprint, Helper, true, static_cast<UFunction*>(nullptr));
+		TArray<UK2Node_FunctionEntry*> Entries;
+		Helper->GetNodesOfClass(Entries);
+		ASSERT_THAT(AreEqual(1, Entries.Num()));
+		FBPVariableDescription Local;
+		Local.VarName = TEXT("UnsafeTime");
+		Local.VarGuid = FGuid::NewGuid();
+		Local.VarType.PinCategory = UEdGraphSchema_K2::PC_Real;
+		Local.VarType.PinSubCategory = UEdGraphSchema_K2::PC_Float;
+		Entries[0]->LocalVariables.Add(Local);
+		FDataValidationContext Context;
+		ASSERT_THAT(IsTrue(Validate(*Blueprint, Context) == EDataValidationResult::Invalid));
+		ASSERT_THAT(AreEqual(1, Context.GetNumErrors()));
+	}
+
+	TEST(ExternalBlueprintHelperIsNotCertifiedByLocalGraphName,
+		"SeinARTS.Editor.Blueprint.AbilityDeterminism")
+	{
+		using namespace AbilityDeterminismValidation;
+		UBlueprint* Blueprint = MakeAbilityBlueprint();
+		UBlueprint* Other = MakeAbilityBlueprint();
+		ASSERT_THAT(IsNotNull(Blueprint));
+		ASSERT_THAT(IsNotNull(Other));
+		for (UBlueprint* Owner : { Blueprint, Other })
+		{
+			UEdGraph* Helper = FBlueprintEditorUtils::CreateNewGraph(
+				Owner, TEXT("TryShot"), UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+			FBlueprintEditorUtils::AddFunctionGraph(Owner, Helper, true, static_cast<UFunction*>(nullptr));
+			FKismetEditorUtilities::CompileBlueprint(Owner);
+		}
+		const UFunction* External = Other->SkeletonGeneratedClass->FindFunctionByName(TEXT("TryShot"));
+		ASSERT_THAT(IsNotNull(External));
+		UEdGraph* EventGraph = FBlueprintEditorUtils::FindEventGraph(Blueprint);
+		ASSERT_THAT(IsNotNull(EventGraph));
+		AddCall(*EventGraph, *External);
+		FDataValidationContext Context;
+		ASSERT_THAT(IsTrue(Validate(*Blueprint, Context) == EDataValidationResult::Invalid));
+		ASSERT_THAT(AreEqual(1, Context.GetNumErrors()));
 	}
 
 	TEST(AbilityFloatMemberIsBlockingValidationError,
@@ -313,6 +461,48 @@ namespace UE::SeinARTSTests
 		Call->PostPlacedNewNode();
 		Call->AllocateDefaultPins();
 
+		FDataValidationContext Context;
+		ASSERT_THAT(IsTrue(
+			Validate(*Blueprint, Context) == EDataValidationResult::Valid));
+		ASSERT_THAT(AreEqual(0, Context.GetNumErrors()));
+	}
+
+	TEST(ProductionPolicyNodesPassAbilityDeterminismValidation,
+		"SeinARTS.Editor.Blueprint.AbilityDeterminism")
+	{
+		using namespace AbilityDeterminismValidation;
+		UBlueprint* Blueprint = MakeAbilityBlueprint();
+		ASSERT_THAT(IsNotNull(Blueprint));
+		UEdGraph* Graph = FBlueprintEditorUtils::FindEventGraph(Blueprint);
+		ASSERT_THAT(IsNotNull(Graph));
+		for (const FName FunctionName : {
+			GET_FUNCTION_NAME_CHECKED(USeinProductionBPFL, SeinCanEnqueueProduction),
+			GET_FUNCTION_NAME_CHECKED(USeinProductionBPFL, SeinSetPlayerQueuePolicy),
+			GET_FUNCTION_NAME_CHECKED(USeinProductionBPFL, SeinSetProductionUnitQueuePolicy),
+			GET_FUNCTION_NAME_CHECKED(USeinProductionBPFL, SeinClearPlayerQueuePolicy),
+			GET_FUNCTION_NAME_CHECKED(USeinProductionBPFL, SeinClearProductionUnitQueuePolicy)})
+		{
+			const UFunction* Function = USeinProductionBPFL::StaticClass()->FindFunctionByName(FunctionName);
+			ASSERT_THAT(IsNotNull(Function));
+			AddCall(*Graph, *Function);
+		}
+		FDataValidationContext Context;
+		ASSERT_THAT(IsTrue(Validate(*Blueprint, Context) == EDataValidationResult::Valid));
+		ASSERT_THAT(AreEqual(0, Context.GetNumErrors()));
+	}
+
+	TEST(CancelProductionAbilityNodePassesDeterminismValidation,
+		"SeinARTS.Editor.Blueprint.AbilityDeterminism")
+	{
+		using namespace AbilityDeterminismValidation;
+		UBlueprint* Blueprint = MakeAbilityBlueprint();
+		ASSERT_THAT(IsNotNull(Blueprint));
+		UEdGraph* Graph = FBlueprintEditorUtils::FindEventGraph(Blueprint);
+		ASSERT_THAT(IsNotNull(Graph));
+		const UFunction* Cancel = USeinAbility::StaticClass()->FindFunctionByName(
+			GET_FUNCTION_NAME_CHECKED(USeinAbility, CancelProduction));
+		ASSERT_THAT(IsNotNull(Cancel));
+		AddCall(*Graph, *Cancel);
 		FDataValidationContext Context;
 		ASSERT_THAT(IsTrue(
 			Validate(*Blueprint, Context) == EDataValidationResult::Valid));

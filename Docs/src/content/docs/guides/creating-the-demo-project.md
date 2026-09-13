@@ -73,7 +73,7 @@ All gameplay assets authored by this series belong to the project's own Content 
 
 ## 4. Configure Unreal's project settings
 
-Open **Edit > Project Settings**. Set or verify each of the following values explicitly, even when the template already supplied the correct value. Use the settings search to find the named property.
+Open **Edit > Project Settings**. Configure the following values where they differ from your project's settings. Use the settings search to find the named property.
 
 | Property | Value | Purpose |
 | --- | --- | --- |

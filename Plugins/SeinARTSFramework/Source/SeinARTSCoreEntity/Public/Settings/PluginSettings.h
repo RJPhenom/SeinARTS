@@ -134,37 +134,20 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Simulation", meta = (ClampMin = "1", UIMin = "32", UIMax = "1024"))
 	int32 EffectCountWarningThreshold;
 
-	/**
-	 * Where generated manifest assets are written. When you press Generate / Regenerate Manifest, the
-	 * result is saved here as SeinSimulationContentManifest and the Simulation Content Manifest
-	 * reference below is updated to point at it.
-	 *
-	 * Default /Game/SeinARTS/. Choose a project-owned folder beneath /Game; it is created if missing.
-	 * Generate / Regenerate Manifest writes a new manifest there and updates the reference below only
-	 * after the save succeeds. Existing manifest assets are not deleted automatically.
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Simulation",
-		meta = (DisplayName = "Manifest Save Folder", ContentDir))
+	/** Destination for the optional Rebuild Compatibility Data recovery tool.
+	 *  Ordinary Play and packaging do not read or write this folder. */
+	UPROPERTY(Config, EditAnywhere, AdvancedDisplay, Category = "Simulation",
+		meta = (DisplayName = "Recovery Manifest Save Folder", ContentDir))
 	FDirectoryPath ManifestSaveFolder;
 
-	/**
-	 * OPTIONAL generated source-content evidence used by bootstrap, snapshots,
-	 * replays, and network compatibility. None is a supported mode, not an
-	 * error: the runtime seals a synthesized profile from the live code
-	 * registry at world init (content-blind, nothing is scanned), so every way
-	 * of playing works with zero setup and peers still fail loudly at join on
-	 * mismatched code contracts. Configuring a generated manifest adds what
-	 * only a bake can prove: saved-package asset-parity records and per-world
-	 * coverage evidence for shipped or competitive builds.
-	 *
-	 * Designers continue authoring ordinary Blueprint gameplay assets; the
-	 * editor generator updates this read-only manifest (and by default keeps it
-	 * fresh for PIE — see Sein.SimulationContent.AutoGenerateForPIE). The asset
-	 * may contain several exact contributor-set profiles so one project can
-	 * support Framework-only and opt-in extension combinations.
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Simulation",
-		meta = (DisplayName = "Simulation Content Manifest"))
+	/** Optional saved evidence for strict editor compatibility testing.
+	 *  Ordinary Play ignores this reference and supports unsaved authoring.
+	 *  Packaging generates its own compatibility data in the cook output.
+	 *  Enable Sein.SimulationContent.RequireFreshManifestForPIE only when
+	 *  deliberately testing this saved evidence; Rebuild Compatibility Data
+	 *  refreshes it after its source assets have been compiled and saved. */
+	UPROPERTY(Config, EditAnywhere, AdvancedDisplay, Category = "Simulation",
+		meta = (DisplayName = "Recovery Simulation Content Manifest"))
 	TSoftObjectPtr<USeinSimulationContentManifest> SimulationContentManifest;
 
 	/**
@@ -177,17 +160,10 @@ public:
 		meta = (DisplayName = "Additional Simulation Content Roots"))
 	TArray<FSoftObjectPath> AdditionalSimulationContentRoots;
 
-	/**
-	 * OFF (default): baked coverage is advisory — starting a match on a world
-	 * the configured manifest does not cover logs a warning and plays anyway;
-	 * peer compatibility is still enforced through the content-digest
-	 * handshake. ON: bootstrap refuses to start on an uncovered world, making
-	 * the generated manifest the authoritative allow-list for deterministic
-	 * play (for shipped or competitive builds). Ignored while no manifest is
-	 * configured, because a synthesized profile has no coverage claims to
-	 * enforce. Local admission policy only — deliberately outside the config
-	 * fingerprint.
-	 */
+	/** Require the current map to appear in saved compatibility evidence.
+	 *  Applies to cooked builds and strict editor testing. Ordinary editor
+	 *  sessions have no saved coverage requirement. This local admission
+	 *  policy does not change peer compatibility checks. */
 	UPROPERTY(Config, EditAnywhere, Category = "Simulation",
 		meta = (DisplayName = "Require Simulation Content Coverage"))
 	bool bRequireSimulationContentCoverage = false;
@@ -1364,71 +1340,30 @@ public:
 	// Editor Preferences — Tag Semantics (auto-generation of tags from asset names)
 	// ----------------------------------------------------------------------------------------------------
 
-	/**
-	 * Master switch for automatically deriving gameplay tags from asset names. Off, the SeinARTS
-	 * factories stop stamping tags on new assets, the rename hook stops updating them, and the
-	 * Regenerate buttons do nothing. Existing auto-generated-tag flags are left untouched, so turning it
-	 * back on resumes where you left off. Use this if your team prefers to author every tag by hand, or
-	 * to pause the system without uninstalling it.
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Editor Preferences",
-		meta = (DisplayName = "Enable Auto Tag Generation"))
-	bool bEnableAutoTagGeneration;
+    /** Generate identities from asset names. Content Browser renames migrate generated tag hierarchies
+     *  and references automatically; moving an asset without renaming it leaves its tag unchanged. */
+    UPROPERTY(Config, EditAnywhere, Category = "Editor Preferences",
+        meta = (DisplayName = "Enable Auto Tag Generation"))
+    bool bEnableAutoTagGeneration;
 
-	/**
-	 * The root namespace put in front of every auto-generated tag, before its category and name. The
-	 * default, SeinARTS, produces tags like SeinARTS.Ability.Move and SeinARTS.Unit.Infantry; leave it
-	 * empty for un-namespaced tags like Ability.Move. Set it to your own project name (say MyGame) to
-	 * get MyGame.Ability.Move — usually paired with adding your own prefix mappings below so your
-	 * asset-naming feeds the same generator. Changing this invalidates every existing auto-generated
-	 * tag, and the panel offers to regenerate them when you edit it.
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Editor Preferences",
-		meta = (DisplayName = "Tag Prefix"))
-	FString TagPrefix;
+    /** Namespace for newly generated identities, such as SeinARTS.Ability.Move.
+     *  Used when creating, renaming, or initializing generated identities. Changing this setting alone does not rewrite existing tags. */
+    UPROPERTY(Config, EditAnywhere, Category = "Editor Preferences", meta = (DisplayName = "Tag Prefix"))
+    FString TagPrefix;
 
-	/**
-	 * The table that turns an asset-name prefix into a tag category. An asset named Prefix_Name becomes
-	 * the tag TagPrefix.Category.Name. Ships with the SeinARTS conventions:
-	 *
-	 *   SA  becomes Ability   (SA_Move         becomes SeinARTS.Ability.Move)
-	 *   SU  becomes Unit      (SU_Infantry     becomes SeinARTS.Unit.Infantry)
-	 *   SE  becomes Effect    (SE_Boost        becomes SeinARTS.Effect.Boost)
-	 *   SR  becomes Research  (SR_VehicleDepot becomes SeinARTS.Research.VehicleDepot) — the producible
-	 *   ST  becomes Tech      (ST_VehicleDepot becomes SeinARTS.Tech.VehicleDepot)     — the granted player tag
-	 *   SBP becomes Entity    (SBP_Smoke       becomes SeinARTS.Entity.Smoke)
-	 *
-	 * SR and ST are a pair: an SR_ producible grants a tech effect whose tags include the matching ST_
-	 * tech tag, so authoring runs in a straight line — build SR_VehicleDepot, its effect grants
-	 * ST_VehicleDepot to the player, and an SA_ ability that requires ST_VehicleDepot unlocks.
-	 *
-	 * Add entries for your own prefixes (say MA becomes Ability for a project that names abilities MA_).
-	 * Several prefixes may map to the same category, which is fine. Changing entries invalidates existing
-	 * auto-generated tags, and the panel offers to regenerate when you edit the table.
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Editor Preferences",
-		meta = (DisplayName = "Prefix Category Mappings",
-				TitleProperty = "AssetPrefix"))
-	TArray<FSeinTagPrefixMapping> PrefixCategoryMappings;
+    /** Map asset prefixes to initial tag categories: SA -> Ability, SU -> Unit, SE -> Effect,
+     *  SR -> Research, ST -> Tech, SBP -> Entity. The mapping only names an identity; research
+     *  effects, granted player tags and ability requirements are wired separately by the designer.
+     *  Existing tags do not change when this table changes. */
+    UPROPERTY(Config, EditAnywhere, Category = "Editor Preferences",
+        meta = (DisplayName = "Prefix Category Mappings", TitleProperty = "AssetPrefix"))
+    TArray<FSeinTagPrefixMapping> PrefixCategoryMappings;
 
-	/**
-	 * Whether extra underscores in an asset name become tag-hierarchy separators. On, the name nests:
-	 *
-	 *   SE_Movement_SprintBoost     becomes SeinARTS.Effect.Movement.SprintBoost
-	 *   SA_Production_BuildBarracks becomes SeinARTS.Ability.Production.BuildBarracks
-	 *   SU_Infantry_Officer         becomes SeinARTS.Unit.Infantry.Officer
-	 *
-	 * Off, only the prefix is split and the rest of the underscores stay in the name:
-	 *
-	 *   SE_Movement_SprintBoost     becomes SeinARTS.Effect.Movement_SprintBoost
-	 *
-	 * Layering lets you express deep hierarchies through folder-style naming, which is the whole point
-	 * of tag hierarchy matching. Default on. Changing it invalidates existing auto-generated tags, and
-	 * the panel offers to regenerate when you toggle it.
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Editor Preferences",
-		meta = (DisplayName = "Allow Tag Layering"))
-	bool bAllowTagLayering;
+    /** Turn extra underscores into hierarchy levels for new identities: SU_Infantry_Officer
+     *  becomes SeinARTS.Unit.Infantry.Officer. Disabled, it becomes SeinARTS.Unit.Infantry_Officer.
+     *  This affects hierarchical matching, not exact identity lookup. Existing tags stay unchanged. */
+    UPROPERTY(Config, EditAnywhere, Category = "Editor Preferences", meta = (DisplayName = "Allow Tag Layering"))
+    bool bAllowTagLayering;
 
 	// Editor Preferences — Factory Visibility (Content Browser)
 	// ----------------------------------------------------------------------------------------------------

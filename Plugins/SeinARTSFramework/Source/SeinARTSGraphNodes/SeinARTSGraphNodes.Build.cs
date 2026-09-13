@@ -26,7 +26,10 @@ public class SeinARTSGraphNodes : ModuleRules
 			"Kismet",                       // K2Node + FBlueprintEditorUtils
 			"KismetCompiler",               // FKismetCompilerContext
 			"GraphEditor",
+			"AssetRegistry",                // Saved component type discovery and lifecycle notifications
 			"SeinARTSCore",
+			"SeinARTSFramework",
+			"GameplayTags",
 			"SeinARTSCoreEntity",           // FSeinComponent base + USeinComponentBPFL the K2 nodes wrap
 		});
 	}

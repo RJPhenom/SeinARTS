@@ -487,9 +487,47 @@ ASeinPlayerStart* ASeinGameMode::FindPlayerStartForSlot(int32 SlotIndex) const
 	return Match;
 }
 
+void ASeinGameMode::SwapPlayerControllers(APlayerController* OldPC, APlayerController* NewPC)
+{
+	USeinLobbySubsystem* Lobby = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<USeinLobbySubsystem>() : nullptr;
+	if (!IsValid(OldPC) || !OldPC->Player || !Lobby
+		|| !Lobby->RebindSeamlessController(OldPC, NewPC))
+	{
+		RejectedSeamlessControllers.Add(NewPC);
+	}
+	Super::SwapPlayerControllers(OldPC, NewPC);
+}
+
+void ASeinGameMode::HandleSeamlessTravelPlayer(AController*& Controller)
+{
+	APlayerController* Previous = Cast<APlayerController>(Controller);
+	USeinLobbySubsystem* Lobby = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<USeinLobbySubsystem>() : nullptr;
+	if (Previous && !Previous->Player
+		&& (!Lobby || !Lobby->RebindSeamlessController(Previous, Previous)))
+	{
+		RejectedSeamlessControllers.Add(Previous);
+	}
+	Super::HandleSeamlessTravelPlayer(Controller);
+	APlayerController* Current = Cast<APlayerController>(Controller);
+	if (Current && !RejectedSeamlessControllers.Contains(Current)
+		&& (!Lobby || !Lobby->RebindSeamlessController(Current, Current)))
+	{
+		RejectedSeamlessControllers.Add(Current);
+	}
+	if (Current && RejectedSeamlessControllers.Remove(Current) > 0)
+	{
+		UE_LOG(LogTemp, Error, TEXT("SeinGameMode: seamless controller handoff lost its admitted lobby seat; connection rejected."));
+		Current->Destroy();
+		Controller = nullptr;
+	}
+}
+
 void ASeinGameMode::HandleStartingNewPlayer_Implementation(
 	APlayerController* NewPlayer)
 {
+	if (RejectedSeamlessControllers.Contains(NewPlayer)) return;
 	Super::HandleStartingNewPlayer_Implementation(NewPlayer);
 
 	ASeinPlayerController* SeinController =

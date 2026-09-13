@@ -364,7 +364,7 @@ namespace
 			return A.StableSchemaId.Compare(B.StableSchemaId, ESearchCase::CaseSensitive) < 0;
 		});
 
-		FString Manifest = FString::Printf(TEXT("SeinCommandSchemas|3|%d|"), Schemas.Num());
+		FString Manifest = FString::Printf(TEXT("SeinCommandSchemas|4|%d|"), Schemas.Num());
 		for (const FCanonicalCommandSchema& Schema : Schemas)
 		{
 			Manifest += TEXT("S[");
@@ -1170,6 +1170,9 @@ namespace
 			}
 		}
 
+		if (!Command.ActivationInputs.IsBounded()) return ESeinCommandStructureResult::PayloadTooLarge;
+		if (Command.CommandType != FGameplayTag::RequestGameplayTag(TEXT("SeinARTS.Command.Type.ActivateAbility"))
+			&& !Command.ActivationInputs.IsEmpty()) return ESeinCommandStructureResult::UnexpectedPayload;
 		if (Command.EntityList.Num() > Descriptor.MaxEntityListEntries)
 		{
 			return ESeinCommandStructureResult::EntityListTooLarge;

@@ -18,6 +18,7 @@
 #include "Simulation/SeinTestMatchBootstrap.h"
 #include "Simulation/SeinTestSimContext.h"
 #include "Simulation/SeinWorldSubsystem.h"
+#include "Simulation/SeinActorBridgeSubsystem.h"
 #include "System/SeinCoverDefault.h"
 #include "System/SeinCoverSubsystem.h"
 #include "System/SeinCoverSystem.h"
@@ -242,6 +243,8 @@ namespace UE::SeinARTSExtensionTests
 			World->RegisterPlayer(Player, FSeinFactionID(1));
 			Member = World->SpawnAbstractEntity(
 				FFixedTransform(Position(0)), Player);
+			// This abstract fixture stands in for a selectable rendered unit.
+			World->GetEntityMutable(Member)->SetSelectable(true);
 			FSeinExtentsShape Shape;
 			Shape.Shape = ESeinExtentsShape::Capsule;
 			Shape.Radius = FFixedPoint::FromInt(60);
@@ -283,7 +286,17 @@ namespace UE::SeinARTSExtensionTests
 			Spawner.SpawnActor<ASeinPlayerController>();
 		MemberActor.InitializeWithEntity(Member);
 		ProviderActor.InitializeWithEntity(Provider);
+		USeinActorBridgeSubsystem* ActorBridge =
+			Spawner.GetWorld().GetSubsystem<USeinActorBridgeSubsystem>();
+		ASSERT_THAT(IsNotNull(ActorBridge));
+		ActorBridge->RegisterActor(Member, &MemberActor);
+		ActorBridge->RegisterActor(Provider, &ProviderActor);
 		Controller.SeinPlayerID = Player;
+		ASSERT_THAT(IsFalse(MemberActor.IsHidden()));
+		ASSERT_THAT(IsTrue(World->IsEntityAlive(Member)));
+		ASSERT_THAT(IsTrue(World->GetEntity(Member)->IsSelectable()));
+		ASSERT_THAT(IsTrue(World->GetEntityOwner(Member) == Player));
+		ASSERT_THAT(IsTrue(ActorBridge->GetActorForEntity(Member) == &MemberActor));
 		Controller.SelectedActors.Add(&MemberActor);
 		Controller.IssueSmartCommandEx(
 			FVector(1000.0, 0.0, 0.0),

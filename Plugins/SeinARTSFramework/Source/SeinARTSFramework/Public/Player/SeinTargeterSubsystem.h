@@ -37,6 +37,7 @@
 #include "Core/SeinEntityHandle.h"
 #include "Abilities/SeinTargeterTypes.h"
 #include "Abilities/SeinTargeterSpec.h"
+#include "Targeter/SeinTargeterPreviewContext.h"
 #include "SeinTargeterSubsystem.generated.h"
 
 class ASeinTargeterPreview;
@@ -132,7 +133,10 @@ public:
 
 private:
 	/** Internal — fully reset to idle state, despawn preview, clear data. */
-	void ResetToIdle();
+	void ResetToIdle(ESeinPreviewEndReason Reason = ESeinPreviewEndReason::Cancelled, bool bNotify = true);
+	FSeinTargeterPreviewContext BuildPreviewContext() const;
+	bool NotifyCapture(const FVector& Start, const FVector& End);
+	uint64 SessionRevision = 0;
 
 	/** Capture one point at the current cursor + advance the cycle counter.
 	 *  Used by both the click-to-capture path (point spec) and the drag-end
@@ -174,6 +178,9 @@ private:
 	 *  or non-line spec → Valid. Advisory client UX. */
 	ESeinTargeterValidity EvaluateCorridorFit(
 		const FVector& StartWorld, const FVector& EndWorld) const;
+
+	/** Combine authored client rules with the shared placement gate at the captured pose. */
+	ESeinTargeterValidity EvaluateValidity(const FFixedVector& Location, const FFixedVector& AuxLocation) const;
 
 	/** Worst-of combine for validity tri-states (Blocked > Warning > Valid). */
 	static ESeinTargeterValidity CombineValidity(

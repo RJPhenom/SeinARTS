@@ -259,8 +259,9 @@ clean — do not redesign them under this list.
   that world's managed live Move To actions and camera/budget. Yellow lines show the
   remaining committed route; orange segments are reverse and orange endpoints are partial paths.
   Cyan joins the displayed actor to the next waypoint/segment end, not a steering carrot.
-  Green is the direction between the bridge's last two captured settled sim poses; gray
-  shows the current sim pose and interpolation offset. This is a through-terrain overlay.
+  Gray shows the current sim pose and interpolation offset. The green captured-motion arrow
+  was removed on 2026-09-06: heading and motion are Steering-view concerns, and the settled
+  velocity arrow there already covers it. This is a through-terrain overlay.
 - Movement+ reads its real typed-segment cursor; escape paths use the action's escape
   origin/path. As corrected on 2026-09-05, filled yellow cells show the exact full A* chain
   before smoothing, with its final cell blue, by default (`Sein.Nav.Show.RawCells 0` hides
@@ -374,3 +375,7 @@ clean — do not redesign them under this list.
   and any avoidance-model deflation that changes observable behavior — after PIE evidence.
 
 These decisions should be presented with live-code options and a recommendation. Do not silently choose them during cleanup or unrelated fixes.
+
+### Construction lifecycle acceptance (2026-09-11)
+
+Construction now uses explicit lifecycle operations and work fields on one Sein Construction component, generic entity binding and explicit visual groups; Barracks/Factory and the progress widget are migrated. PIE/Details visual acceptance remains open; strict saved manifest generation is blocked by the unrelated missing WBP_UnitBanner dependency. Current evidence, exact manual checks and broad-suite exceptions are maintained in [CONSTRUCTION_LIFECYCLE.md](CONSTRUCTION_LIFECYCLE.md).

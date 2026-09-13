@@ -1,15 +1,12 @@
 #include "Graph/SeinPinFactory.h"
 #include "EdGraphSchema_K2.h"
 #include "SGraphPin.h"
-#include "Types/FixedPoint.h"
 #include "Types/Vector.h"
 #include "Types/Rotator.h"
 #include "Types/Transform.h"
 
 namespace SeinPinColors
 {
-	// FFixedPoint:     #38D500 (matches UE float pin green)
-	static const FLinearColor FixedPoint     = FLinearColor::FromSRGBColor(FColor(0x38, 0xD5, 0x00));
 	// FFixedVector:    #FFCA23 (matches UE vector pin yellow/gold)
 	static const FLinearColor FixedVector    = FLinearColor::FromSRGBColor(FColor(0xFF, 0xCA, 0x23));
 	// FFixedRotator:   #A0B4FF (matches UE rotator pin light purple)
@@ -60,12 +57,7 @@ TSharedPtr<SGraphPin> FSeinPinFactory::CreatePin(UEdGraphPin* Pin) const
 	FLinearColor OverrideColor = FLinearColor::White;
 	bool bHandled = false;
 
-	if (Struct == FFixedPoint::StaticStruct())
-	{
-		OverrideColor = SeinPinColors::FixedPoint;
-		bHandled = true;
-	}
-	else if (Struct == FFixedVector::StaticStruct())
+	if (Struct == FFixedVector::StaticStruct())
 	{
 		OverrideColor = SeinPinColors::FixedVector;
 		bHandled = true;

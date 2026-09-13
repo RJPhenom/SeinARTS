@@ -12,6 +12,8 @@
  */
 
 #include "CQTest.h"
+#include "HAL/IConsoleManager.h"
+#include "Misc/ScopeExit.h"
 #include "Components/ActorTestSpawner.h"
 
 #include "Serialization/SeinSimulationContentManifest.h"
@@ -205,5 +207,42 @@ namespace UE::SeinARTSTests
 			ASSERT_THAT(IsTrue(StartError.Contains(TEXT(
 				"absent from the selected Simulation Content profile"))));
 		}
+	}
+
+	TEST(EditorSessionIgnoresMissingAndCorruptSavedManifest,
+		"SeinARTS.Unit.CoreEntity.SimulationContent")
+	{
+		SimulationContentMode::FScopedContentSettings Restore;
+		IConsoleVariable* Strict = IConsoleManager::Get().FindConsoleVariable(
+			TEXT("Sein.SimulationContent.RequireFreshManifestForPIE"));
+		ASSERT_THAT(IsNotNull(Strict));
+		const int32 Previous = Strict->GetInt();
+		ON_SCOPE_EXIT { Strict->Set(Previous, ECVF_SetByCode); };
+		Strict->Set(0, ECVF_SetByCode);
+		auto* Settings = GetMutableDefault<USeinARTSCoreSettings>();
+		Settings->bRequireSimulationContentCoverage = true;
+		Settings->SimulationContentManifest = TSoftObjectPtr<USeinSimulationContentManifest>(
+			FSoftObjectPath(TEXT("/Game/MissingCompatibility.MissingCompatibility")));
+		const auto MissingSetting = Settings->SimulationContentManifest;
+		FGuid FirstDigest;
+		{
+			FActorTestSpawner Spawner;
+			auto* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+			ASSERT_THAT(IsNotNull(World));
+			ASSERT_THAT(IsTrue(World->IsSimulationContentReady()));
+			ASSERT_THAT(IsTrue(World->IsSimulationContentSynthesized()));
+			ASSERT_THAT(IsTrue(SeinTestMatchBootstrap::Start(*World)));
+			FirstDigest = World->GetSimulationContentDigest();
+			ASSERT_THAT(IsTrue(Settings->SimulationContentManifest == MissingSetting));
+		}
+		TStrongObjectPtr<USeinSimulationContentManifest> Broken(NewObject<USeinSimulationContentManifest>());
+		Broken->FormatVersion = -1;
+		Settings->SimulationContentManifest = Broken.Get();
+		FActorTestSpawner Spawner;
+		auto* World = Spawner.GetWorld().GetSubsystem<USeinWorldSubsystem>();
+		ASSERT_THAT(IsNotNull(World));
+		ASSERT_THAT(IsTrue(World->IsSimulationContentReady()));
+		ASSERT_THAT(IsTrue(World->GetSimulationContentDigest() == FirstDigest));
+		ASSERT_THAT(IsTrue(Settings->SimulationContentManifest.Get() == Broken.Get()));
 	}
 }

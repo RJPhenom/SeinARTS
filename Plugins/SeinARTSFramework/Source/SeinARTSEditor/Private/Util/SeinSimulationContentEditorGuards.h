@@ -30,5 +30,9 @@ public:
 		const FSeinSimulationContentCookIntegration&) = delete;
 
 private:
-	FDelegateHandle ModifyCookHandle;
+	struct FState;
+	TUniquePtr<FState> State;
+	FDelegateHandle ConfigureHandle;
+	FDelegateHandle StartedHandle;
+	FDelegateHandle FinishedHandle;
 };

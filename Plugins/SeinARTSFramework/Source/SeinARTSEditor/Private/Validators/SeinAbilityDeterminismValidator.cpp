@@ -47,3 +47,18 @@ FText USeinAbilityDeterminismValidator::GetToolkitHintText() const
 }
 
 #undef LOCTEXT_NAMESPACE
+
+EDataValidationResult USeinAbilityDeterminismValidator::ValidateLoadedAsset_Implementation(
+	const FAssetData& AssetData, UObject* Asset, FDataValidationContext& Context)
+{
+	const EDataValidationResult Result = Super::ValidateLoadedAsset_Implementation(AssetData, Asset, Context);
+	UBlueprint* Blueprint = Cast<UBlueprint>(Asset);
+	FString Error;
+	if (Blueprint && Blueprint->GeneratedClass
+		&& !FSeinAbilityActivationInputs::ValidateClass(Blueprint->GeneratedClass, Error))
+	{
+		AssetFails(Asset, FText::FromString(Error));
+		return EDataValidationResult::Invalid;
+	}
+	return Result;
+}

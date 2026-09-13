@@ -16,13 +16,14 @@
 #include "Types/Vector.h"
 #include "Types/Quat.h"
 #include "Abilities/SeinTargeterTypes.h"
+#include "Abilities/SeinAbilityActivationInputs.h"
 #include "SeinBrokerTypes.generated.h"
 
 class USeinFormation;
 
 namespace SeinBrokerOrderProtocol
 {
-	constexpr int32 SchemaVersion = 4;
+	constexpr int32 SchemaVersion = 5;
 	constexpr int32 MaxMembers = 4096;
 	constexpr int32 MaxGuidePoints = 4096;
 	constexpr int32 MaxTargeterPoints = 256;
@@ -31,7 +32,7 @@ namespace SeinBrokerOrderProtocol
 	constexpr int32 MaxQueuedOrdersPerBroker = 8192;
 	constexpr int32 MaxPayloadBytes = 384 * 1024;
 	constexpr int32 MaxAggregateContainerEntries =
-		MaxGuidePoints + MaxTargeterPoints
+		MaxGuidePoints + MaxTargeterPoints + FSeinAbilityActivationInputs::MaxBytes
 		+ MaxDestinationArtifactEntries + MaxRecipientPlanEntries;
 }
 
@@ -157,6 +158,10 @@ struct SEINARTSCOREENTITY_API FSeinBrokerQueuedOrder
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
 	TArray<FSeinTargeterPoint> TargeterPoints;
 
+	/** Captured values preserved through ability dispatch. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Ability")
+	FSeinAbilityActivationInputs ActivationInputs;
+
 	/** Predetermined ability tag when this order originated from the targeter
 	 *  (action-slot trigger flow). The player picked the ability before targeting,
 	 *  so the broker resolver should NOT run per-member context resolution against
@@ -261,6 +266,10 @@ struct SEINARTSCOREENTITY_API FSeinBrokerOrderInput
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
 	TArray<FSeinTargeterPoint> TargeterPoints;
 
+	/** Captured values preserved through ability dispatch. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Ability")
+	FSeinAbilityActivationInputs ActivationInputs;
+
 	/** Predetermined ability tag (mirrors FSeinBrokerQueuedOrder::PredeterminedAbilityTag).
 	 *  When valid, default resolver dispatches this ability to the first capable
 	 *  member instead of running per-member context resolution. Invalid = use
@@ -321,6 +330,10 @@ struct SEINARTSCOREENTITY_API FSeinBrokerOrderPayload
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Command")
 	TArray<FSeinTargeterPoint> TargeterPoints;
 
+	/** Captured values preserved through ability dispatch. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Ability")
+	FSeinAbilityActivationInputs ActivationInputs;
+
 	/** Predetermined ability tag when this command originated from the targeter
 	 *  (player picked the ability before placing targets). When valid, broker
 	 *  resolver dispatches this ability instead of running context resolution.
@@ -368,6 +381,10 @@ struct SEINARTSCOREENTITY_API FSeinBrokerMemberDispatch
 	 *  distributed multi-target). Empty for right-click-originated dispatches. */
 	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Broker")
 	TArray<FSeinTargeterPoint> TargeterPoints;
+
+	/** Captured values preserved through ability dispatch. */
+	UPROPERTY(BlueprintReadWrite, Category = "SeinARTS|Ability")
+	FSeinAbilityActivationInputs ActivationInputs;
 };
 
 /**

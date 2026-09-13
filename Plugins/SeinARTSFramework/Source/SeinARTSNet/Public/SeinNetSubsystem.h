@@ -812,6 +812,11 @@ public:
 	/** Releases a consumed controller authority after logout or failed login. */
 	void ReleaseAuthorizedConnection(APlayerController* Controller);
 
+	/** Transfers an existing admission during the server's engine controller handoff. */
+	bool TransferAuthorizedConnection(
+		APlayerController* OldController, APlayerController* NewController,
+		FSeinPlayerID ExpectedSlot);
+
 #if WITH_DEV_AUTOMATION_TESTS
 	/** Installs one exact active match binding for admission seam tests. */
 	void SetConnectionAdmissionBindingForTests(

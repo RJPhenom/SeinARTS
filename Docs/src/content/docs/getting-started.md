@@ -48,3 +48,5 @@ Read [Deterministic Simulation](/core-concepts/deterministic-simulation/) before
 ## Build the demo from a blank project
 
 Start with [Create the Demo Project](/guides/creating-the-demo-project/). The walkthrough begins with plugin installation and project settings. You create the gameplay assets yourself.
+
+The complete sequence builds a Soldier, movement and combat, mineral income, a HUD, Barracks and Factory production, a research unlock, a transport Truck, fog and minimap, and a two-player lobby. It ends with [packaging and gameplay verification](/guides/packaging-and-verifying-the-demo/). The transport chapter includes the small game-side C++ authoring components it needs; the gameplay graphs are authored in Blueprint.

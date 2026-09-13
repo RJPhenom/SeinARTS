@@ -2292,6 +2292,8 @@ namespace UE::SeinARTSTests
 		USeinReplayWriter* Writer = StartV9Recording(
 			*Source, MakeOnePlayerMatchSettings());
 		ASSERT_THAT(IsNotNull(Writer));
+		FScopedReplayWorkerDrain WorkerDrain{Writer};
+		constexpr uint32 GateWaitMilliseconds = 10000;
 		ASSERT_THAT(AreEqual(1, Writer->GetPersistedCheckpointCount()));
 		ASSERT_THAT(IsFalse(Writer->IsCheckpointAppendPending()));
 
@@ -2317,17 +2319,25 @@ namespace UE::SeinARTSTests
 		ASSERT_THAT(AreEqual(0, Writer->GetPersistedTurnCount()));
 		Writer->FlushAppliedProgressForTests();
 		ASSERT_THAT(AreEqual(1, Writer->GetPersistedTurnCount()));
+		Writer->HoldNextCheckpointAppendForTests();
 		Writer->RunScheduledMaintenanceForTests();
 		ASSERT_THAT(IsTrue(Writer->IsCheckpointEncodePending()));
 		ASSERT_THAT(IsFalse(Writer->IsCheckpointAppendPending()));
 		CollectGarbage(RF_NoFlags);
-		ASSERT_THAT(IsTrue(Writer->IsCheckpointEncodePending()));
+		// GC may pump the game-thread task that advances encoding to append.
+		ASSERT_THAT(IsTrue(Writer->IsRecording()));
 		Writer->ResolveCheckpointEncodeForTests();
 		ASSERT_THAT(IsFalse(Writer->IsCheckpointEncodePending()));
 		ASSERT_THAT(IsTrue(Writer->IsCheckpointAppendPending()));
+		ASSERT_THAT(IsTrue(Writer->WaitForHeldBackgroundAppendForTests(
+			GateWaitMilliseconds)));
 		ASSERT_THAT(AreEqual(1, Writer->GetPersistedCheckpointCount()));
 
+		TFuture<bool> FinalizationRelease =
+			Writer->ReleaseHeldBackgroundAppendAfterWriterWaitForTests(
+				GateWaitMilliseconds);
 		FScopedReplayFile ReplayFile{Writer->FinishRecording()};
+		ASSERT_THAT(IsTrue(FinalizationRelease.Get()));
 		ASSERT_THAT(IsFalse(ReplayFile.Path.IsEmpty()));
 		ASSERT_THAT(IsFalse(Writer->IsCheckpointAppendPending()));
 		ASSERT_THAT(AreEqual(2, Writer->GetPersistedCheckpointCount()));

@@ -22,6 +22,7 @@
 #include "Types/Vector.h"
 #include "Abilities/SeinAbilityTypes.h"
 #include "Components/SeinAbilityPayload.h"
+#include "Abilities/SeinAbilityActivationInputs.h"
 #include "SeinAbilityBPFL.generated.h"
 
 class USeinWorldSubsystem;
@@ -119,8 +120,18 @@ public:
 		FFixedVector TargetLocation,
 		bool bQueueCommand = false);
 
+	/** Issue a broker order with captured activation values from simulation.
+	 *  Every selected performer receives its own copy. Without a broker, the
+	 *  caller receives a single-entity ability command with the same inputs. */
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Broker",
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Issue Broker Order With Inputs", AutoCreateRefTerm = "Inputs"))
+	static void SeinIssueBrokerOrderWithInputs(const UObject* WorldContextObject,
+		FSeinEntityHandle CallerEntity, FGameplayTag AbilityTag,
+		FSeinEntityHandle TargetEntity, FFixedVector TargetLocation,
+		const FSeinAbilityActivationInputs& Inputs, bool bQueueCommand = false);
+
 	/** Cancels the currently active primary ability on an entity. */
-	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Ability", meta = (WorldContext = "WorldContextObject", DisplayName = "Cancel Ability"))
+	UFUNCTION(BlueprintCallable, Category = "SeinARTS|Ability", meta = (WorldContext = "WorldContextObject", DisplayName = "Cancel Active Ability"))
 	static void SeinCancelAbility(const UObject* WorldContextObject, FSeinEntityHandle EntityHandle);
 
 	// ─── Runtime ability grant / revoke ───

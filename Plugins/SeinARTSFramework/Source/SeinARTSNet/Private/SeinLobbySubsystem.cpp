@@ -1515,6 +1515,58 @@ void USeinLobbySubsystem::NotifyLobbyStateActorEndPlay(ASeinLobbyState* Actor)
 	}
 }
 
+#if WITH_DEV_AUTOMATION_TESTS
+void USeinLobbySubsystem::LogoutControllerForTests(APlayerController* Controller)
+{
+	OnLogout(nullptr, Controller);
+}
+#endif
+
+bool USeinLobbySubsystem::RebindSeamlessController(
+	APlayerController* OldController, APlayerController* NewController)
+{
+	check(IsInGameThread());
+	if (!IsServer() || !IsValid(OldController) || !IsValid(NewController)
+		|| OldController->GetGameInstance() != GetGameInstance()
+		|| OldController->GetWorld() != GetWorld()
+		|| NewController->GetWorld() != GetWorld() || !NewController->PlayerState) return false;
+	const int32* Existing = ControllerToSlot.Find(OldController);
+	if (!Existing || *Existing <= 0) return false;
+	const int32 SlotIndex = *Existing;
+	if (bPublishedSnapshotLaunchCommitted)
+	{
+		const FSeinMatchSlot* FrozenSlot = PublishedSnapshot.Slots.FindByPredicate(
+			[SlotIndex](const FSeinMatchSlot& Candidate) { return Candidate.SlotIndex == SlotIndex; });
+		if (!FrozenSlot || FrozenSlot->State != ESeinSlotState::Human) return false;
+	}
+	for (const auto& Pair : ControllerToSlot)
+	{
+		if (Pair.Key.Get() == OldController) continue;
+		if (Pair.Key.Get() == NewController
+			|| (Pair.Key.IsValid() && Pair.Value == SlotIndex)) return false;
+	}
+	EnsureLobbyActor();
+	ASeinLobbyState* Actor = LobbyStateActor.Get();
+	FSeinLobbySlotState* Slot = Actor ? Actor->FindSlotMutable(SlotIndex) : nullptr;
+	if (!Slot || Slot->State != ESeinSlotState::Human) return false;
+	USeinNetSubsystem* Net = GetGameInstance()->GetSubsystem<USeinNetSubsystem>();
+	if (!Net || !Net->TransferAuthorizedConnection(OldController, NewController,
+		FSeinPlayerID(static_cast<uint8>(SlotIndex)))) return false;
+
+	// Transfer both controller maps before Unreal destroys the old local controller.
+	// A later logout for that stale pointer must not release the replacement seat.
+	ControllerToSlot.Remove(OldController);
+	ControllerToSlot.Add(NewController, SlotIndex);
+	Slot->bDisconnected = false;
+	Slot->bClaimed = true;
+	Slot->ClaimedBy = FSeinPlayerID(static_cast<uint8>(SlotIndex));
+	Slot->LastClaimantNetID = NewController->PlayerState->GetUniqueId();
+	Slot->RemoteAddress = ResolveRemoteAddressForPC(NewController);
+	CancelSlotReclaim(SlotIndex);
+	CommitSlotState(SlotIndex, *Slot);
+	return true;
+}
+
 void USeinLobbySubsystem::EnsureLobbyActor()
 {
 	if (!IsServer()) return;

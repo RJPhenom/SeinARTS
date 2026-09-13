@@ -450,6 +450,12 @@ namespace UE::SeinARTSTests
 			FGameplayTag::RequestGameplayTag(
 				TEXT("Test"), false);
 		ASSERT_THAT(IsTrue(TerrainTag.IsValid()));
+		// Stored terrain index 1 must resolve to this fixture's blocked tag.
+		FSeinTerrainTypeDefinition Terrain;
+		Terrain.TerrainTag = TerrainTag;
+		TGuardValue<TArray<FSeinTerrainTypeDefinition>> TerrainTypesGuard(
+			GetMutableDefault<USeinARTSCoreSettings>()->TerrainTypes,
+			TArray<FSeinTerrainTypeDefinition>{ Terrain });
 
 		USeinNavigationAStar* Nav =
 			NewObject<USeinNavigationAStar>();
@@ -633,6 +639,12 @@ namespace UE::SeinARTSTests
 			FGameplayTag::RequestGameplayTag(
 				TEXT("Test"), false);
 		ASSERT_THAT(IsTrue(TerrainTag.IsValid()));
+		// Stored terrain index 1 must resolve to this fixture's blocked tag.
+		FSeinTerrainTypeDefinition Terrain;
+		Terrain.TerrainTag = TerrainTag;
+		TGuardValue<TArray<FSeinTerrainTypeDefinition>> TerrainTypesGuard(
+			GetMutableDefault<USeinARTSCoreSettings>()->TerrainTypes,
+			TArray<FSeinTerrainTypeDefinition>{ Terrain });
 
 		USeinNavigationAStar* Nav =
 			NewObject<USeinNavigationAStar>();
@@ -678,6 +690,12 @@ namespace UE::SeinARTSTests
 			FGameplayTag::RequestGameplayTag(
 				TEXT("Test"), false);
 		ASSERT_THAT(IsTrue(TerrainTag.IsValid()));
+		// Stored terrain index 1 must resolve to this fixture's blocked tag.
+		FSeinTerrainTypeDefinition Terrain;
+		Terrain.TerrainTag = TerrainTag;
+		TGuardValue<TArray<FSeinTerrainTypeDefinition>> TerrainTypesGuard(
+			GetMutableDefault<USeinARTSCoreSettings>()->TerrainTypes,
+			TArray<FSeinTerrainTypeDefinition>{ Terrain });
 
 		USeinNavigationAStar* Nav =
 			NewObject<USeinNavigationAStar>();
@@ -716,6 +734,12 @@ namespace UE::SeinARTSTests
 			FGameplayTag::RequestGameplayTag(
 				TEXT("Test"), false);
 		ASSERT_THAT(IsTrue(TerrainTag.IsValid()));
+		// Stored terrain index 1 must resolve to this fixture's blocked tag.
+		FSeinTerrainTypeDefinition Terrain;
+		Terrain.TerrainTag = TerrainTag;
+		TGuardValue<TArray<FSeinTerrainTypeDefinition>> TerrainTypesGuard(
+			GetMutableDefault<USeinARTSCoreSettings>()->TerrainTypes,
+			TArray<FSeinTerrainTypeDefinition>{ Terrain });
 
 		USeinNavigationAStar* Nav =
 			NewObject<USeinNavigationAStar>();

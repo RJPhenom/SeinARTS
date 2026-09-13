@@ -15,6 +15,7 @@
 #include "GameplayTagContainer.h"
 #include "StructUtils/InstancedStruct.h"
 #include "Abilities/SeinTargeterTypes.h"
+#include "Abilities/SeinAbilityActivationInputs.h"
 #include "SeinCommand.generated.h"
 
 /** Limits that are part of the cross-module command protocol contract. */
@@ -120,6 +121,10 @@ struct SEINARTSCOREENTITY_API FSeinCommand
 	 *  the multi-unit fan-out. */
 	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command")
 	TArray<FSeinTargeterPoint> TargeterPoints;
+
+	/** Captured activation values. Empty uses class defaults. */
+	UPROPERTY(BlueprintReadOnly, Category = "SeinARTS|Command")
+	FSeinAbilityActivationInputs ActivationInputs;
 
 	// --- Observer data (used by CameraUpdate / SelectionChanged, ignored by sim) ---
 

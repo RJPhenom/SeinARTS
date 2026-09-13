@@ -1,10 +1,11 @@
 #include "SeinConsumerQualificationSubsystem.h"
 
 #include "Containers/Ticker.h"
-#include "Components/SeinMovementComponent.h"
+#include "Components/SeinMovementPayload.h"
 #include "Core/SeinEntityPool.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
+#include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/FileManager.h"
@@ -109,6 +110,28 @@ namespace
 		return Guid.ToString(EGuidFormats::Digits);
 	}
 
+	FString EncodeQualificationIdentity(const UGameInstance& Instance)
+	{
+		const ULocalPlayer* Player = Instance.GetFirstGamePlayer();
+		const FUniqueNetIdRepl ID = Player ? Player->GetPreferredUniqueNetId() : FUniqueNetIdRepl();
+		return FString::Printf(TEXT("valid=%d\nid=%s\n"), ID.IsValid() ? 1 : 0, *ID.ToString());
+	}
+
+	FString EncodeQualificationLobbyIdentity(const USeinLobbySubsystem& Lobby)
+	{
+		FString Result;
+		if (const ASeinLobbyState* State = Lobby.GetLobbyState())
+		{
+			for (const FSeinLobbySlotState& Slot : State->Slots)
+			{
+				Result += FString::Printf(TEXT("slot=%d valid=%d id=%s disconnected=%d\n"),
+					Slot.SlotIndex, Slot.LastClaimantNetID.IsValid() ? 1 : 0,
+					*Slot.LastClaimantNetID.ToString(), Slot.bDisconnected ? 1 : 0);
+			}
+		}
+		return Result;
+	}
+
 	FString EncodeLockstepProgress(const USeinNetSubsystem& Net)
 	{
 		const FSeinLockstepProgress Progress = Net.GetLockstepProgress();
@@ -158,8 +181,8 @@ namespace
 			[&](FSeinEntityHandle Handle, const FSeinEntity& Entity)
 			{
 				(void)Entity;
-				const FSeinMovementComponent* Movement =
-					Sim.GetComponent<FSeinMovementComponent>(Handle);
+				const FSeinMovementPayload* Movement =
+					Sim.GetComponent<FSeinMovementPayload>(Handle);
 				if (!Result.IsValid()
 					&& Pool.GetOwner(Handle) == FSeinPlayerID(2)
 					&& Movement
@@ -180,8 +203,8 @@ namespace
 		const FSeinEntityHandle Handle =
 			FindQualificationMovementEntity(Sim);
 		const FSeinEntity* Entity = Sim.GetEntity(Handle);
-		const FSeinMovementComponent* Movement =
-			Sim.GetComponent<FSeinMovementComponent>(Handle);
+		const FSeinMovementPayload* Movement =
+			Sim.GetComponent<FSeinMovementPayload>(Handle);
 		if (!Entity || !Movement)
 		{
 			return false;
@@ -405,9 +428,10 @@ void USeinConsumerQualificationSubsystem::HandleNetworkFailure(
 		*FString::Printf(TEXT("%s-network-failure.marker"), *Role.ToLower()),
 		Failure);
 	if (Role.Equals(TEXT("Client"), ESearchCase::IgnoreCase)
-		&& !bDisconnectIssued)
+		&& (!bDisconnectIssued || (bReconnectTravelIssued
+			&& FailureType == ENetworkFailure::PendingConnectionFailure)))
 	{
-		Fail(TEXT("unexpected network failure before qualification disconnect: ")
+		Fail(TEXT("unexpected qualification connection failure: ")
 			+ Failure.Replace(TEXT("\n"), TEXT(" ")));
 	}
 }
@@ -696,6 +720,10 @@ void USeinConsumerQualificationSubsystem::TickServer(UWorld& World)
 	if (!bServerSawDrop && bHasDropped)
 	{
 		bServerSawDrop = true;
+		if (const USeinLobbySubsystem* Lobby = GetGameInstance()->GetSubsystem<USeinLobbySubsystem>())
+		{
+			WriteMarker(TEXT("server-drop-identity.marker"), EncodeQualificationLobbyIdentity(*Lobby));
+		}
 		WriteMarker(
 			TEXT("server-drop-observed.marker"),
 			FString::Printf(TEXT("tick=%d\n"), Sim->GetCurrentTick()));
@@ -830,6 +858,7 @@ void USeinConsumerQualificationSubsystem::TickClient(UWorld& World)
 			return;
 		}
 		bInitialConnectTravelIssued = true;
+		WriteMarker(TEXT("client-connect-identity.marker"), EncodeQualificationIdentity(*GetGameInstance()));
 		GEngine->SetClientTravel(&World, *ServerAddress, TRAVEL_Absolute);
 		WriteMarker(
 			TEXT("client-connect-travel.marker"),
@@ -847,6 +876,7 @@ void USeinConsumerQualificationSubsystem::TickClient(UWorld& World)
 				return;
 			}
 			bReconnectTravelIssued = true;
+			WriteMarker(TEXT("client-reconnect-identity.marker"), EncodeQualificationIdentity(*GetGameInstance()));
 			GEngine->SetClientTravel(
 				&World, *ServerAddress, TRAVEL_Absolute);
 			WriteMarker(
