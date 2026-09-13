@@ -5,6 +5,14 @@ another Unreal project.” Generated consumers are disposable evidence, not sour
 
 ## Tool
 
+Consumer iteration delivery uses `Scripts/ReleaseConsumer.ps1`. The current release line is
+`0.3.x` (RJ, 2026-09-13): start at `0.3.0`, then advance the patch above existing tags in
+that line. Commit counts and hashes do not determine the public version. Failed attempts
+before a tag is created reuse the patch; a published tag is immutable and reserves it.
+The GitHub prerelease flag is separate from the version number and remains in place until
+going live is approved. Milestone qualification still uses the release gate below.
+Local-only syncs append `+local.<sha>` so they are distinguishable from published packages.
+
 Run from the repository root:
 
 ```powershell

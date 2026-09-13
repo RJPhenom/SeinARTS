@@ -36,7 +36,7 @@
   links into its own host project, not this project's Binaries).
 #>
 param(
-    [string]   $Version,       # e.g. '1.2.0' -> release tag v1.2.0. Default: 0.0.<commit count>
+    [string]   $Version,       # Default: next patch in the configured release line, using local tags.
     [switch]   $PackageOnly,   # package + zip only; skip the GitHub release
     [string[]] $Only,          # subset of plugin names, for debugging one package
     [string]   $EngineRoot     # optional source/installed engine root; default resolves UE 5.8
@@ -45,6 +45,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Release/SeinReleaseDocumentation.ps1')
+. (Join-Path $PSScriptRoot 'Release/SeinReleaseVersion.ps1')
 $PipelineMutex = [System.Threading.Mutex]::new(
     $false, 'Local\SeinARTS.ArtifactPipeline')
 $PipelineMutexAcquired = $false
@@ -111,8 +112,7 @@ if ($LASTEXITCODE -ne 0 -or -not $PackagingHead) {
 }
 
 if (-not $Version) {
-    $Version = "0.0.$(git -C $ProjectRoot rev-list --count HEAD)"
-    if ($LASTEXITCODE -ne 0) { throw 'Could not derive the default package version from git history.' }
+    $Version = Get-SeinNextReleaseVersion $ProjectRoot
     Write-Host "[PackagePlugins] no -Version given; using '$Version'" -ForegroundColor Yellow
 }
 

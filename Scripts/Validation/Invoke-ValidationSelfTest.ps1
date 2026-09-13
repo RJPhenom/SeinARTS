@@ -279,6 +279,17 @@ exit 0
         Check $Rejected 'Documentation cannot escape its source root'
     }
     finally { Remove-Item Function:\git }
+    . (Join-Path $RepoRoot 'Scripts/Release/SeinReleaseVersion.ps1')
+    Check ((Resolve-SeinNextReleaseVersion @()) -eq '0.3.0') 'New release line starts at patch zero'
+    Check ((Resolve-SeinNextReleaseVersion @('v0.2.0','v0.0.331-gca8b871')) -eq '0.3.0') 'Legacy commit counts cannot override the selected release line'
+    Check ((Resolve-SeinNextReleaseVersion @('v0.3.0')) -eq '0.3.1') 'Published patch advances the next version'
+    Check ((Resolve-SeinNextReleaseVersion @('v0.3.2','v0.3.10','v0.3.9')) -eq '0.3.11') 'Patch ordering is numeric'
+    Check ((Resolve-SeinNextReleaseVersion @('v0.3.4-rc.1','v0.3.2')) -eq '0.3.5') 'Prerelease tags reserve their patch'
+    Check ((Resolve-SeinNextReleaseVersion @('unrelated','v0.3.01')) -eq '0.3.0') 'Unrelated and noncanonical tags are ignored'
+    $Rejected=$false
+    try { Resolve-SeinNextReleaseVersion @('v0.4.0') | Out-Null } catch { $Rejected=$true }
+    Check $Rejected 'A newer release line prevents automatic version regression'
+    Check ((Resolve-SeinNextReleaseVersion @('v0.3.8') -ReleaseLine '0.4') -eq '0.4.0') 'An explicitly selected minor starts at patch zero'
     [ordered]@{status='Passed';shell=$Shell;checks=@($Checks);fixtureRoot=$Fixture} |
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Root 'self-test-result.json')
     Write-Host "[ValidationSelfTest] Passed $($Checks.Count) checks. Receipt: $Root/self-test-result.json"
