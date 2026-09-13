@@ -1,6 +1,6 @@
 # SeinARTS Agent Workflow
 
-Local operational policy, revision 3.2. The linked human [Workflow Policy](https://docs.google.com/document/d/1pb3Z0DdQKAIJ610cMOy1yOP9_RQj1jtzMupfhkyrlfw) was last mirrored at version 3.0. Revisions 3.1 and 3.2 implement RJ's 2026-09-07 workflow and context-efficiency direction; human-source synchronization is pending. Do not imply the human document was updated. Synchronize it when that document is in the authorized scope.
+Local operational policy, revision 3.3. The linked human [Workflow Policy](https://docs.google.com/document/d/1pb3Z0DdQKAIJ610cMOy1yOP9_RQj1jtzMupfhkyrlfw) was last mirrored at version 3.0. Revision 3.3 records RJ's 2026-09-13 release-version and public-repository boundary decisions; human-source synchronization is pending. Do not imply the human document was updated. Synchronize it when that document is in the authorized scope.
 
 ## 1. About
 
@@ -168,15 +168,21 @@ The goal is for testers to have up-to-date local repositories with the latest cl
 
 ### 6.1 Versioning
 
-SeinARTS uses Semantic Versioning:
+SeinARTS uses the project version scheme `MAJOR.MINOR.UPDATE[.HOTFIX]` (RJ, 2026-09-13):
 
-- Major: breaking public API, authoring, saved-data, replay, snapshot, or compatibility changes.
-- Minor: backward-compatible features and capability additions.
-- Patch: backward-compatible fixes, tuning, performance improvements, and documentation corrections.
+- Only RJ changes the first and second digits. Agents never advance either automatically.
+- The active release line is `0.2`. Normal releases increment the third digit: `0.2.1`, `0.2.2`, and so on.
+- A crash or bug-only hotfix may increment the fourth digit: `0.2.1.1`, `0.2.1.2`, and so on.
+- Published tags reserve their number. Commit counts and hashes never determine public versions.
+- The fourth numeric part is a project extension to three-part SemVer; packaging and installation validators must accept it.
+- GitHub releases remain prereleases until RJ explicitly approves going live. A plain numeric version does not imply production approval.
+
+`0.2.0` introduced entity data authoring through ActorComponents instead of directly authoring
+payload structures in the bridge array. The deterministic payload array remains the runtime backend.
 
 The production plugin suite normally ships as one coordinated version. Extensions identify the framework versions they support.
 
-Semantic versions do not guarantee multiplayer compatibility. Released builds also identify their network, simulation, replay, snapshot, persistent-data, simulation-content, engine, and plugin-build compatibility.
+Version numbers do not guarantee multiplayer compatibility. Released builds also identify their network, simulation, replay, snapshot, persistent-data, simulation-content, engine, and plugin-build compatibility.
 
 ### 6.2 Releases
 

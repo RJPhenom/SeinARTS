@@ -18,6 +18,9 @@ abilities and gameplay in Blueprint. Framework primitives remain genre-neutral.
   Agents maintain internal records autonomously; bookkeeping must not create chores for RJ.
 - User decisions own product behavior, feel, compatibility policy, sequencing, and release posture.
   Proceed with routine mechanisms inside the authorized scope; present real forks before implementing them.
+- Public repository content must not name consuming games or include their installation/dispatch integrations.
+  Keep consumer-specific convenience tools local and ignored. Only RJ changes the first two release digits;
+  `.agents/WORKFLOW.md` §6 owns the active `0.2.x` update and `0.2.x.y` bug-hotfix scheme.
 - Verification policy has one owner: `.agents/WORKFLOW.md` §3.3. Use scripts to execute and summarize
   checks. A successful build alone never proves runtime correctness or determinism.
 

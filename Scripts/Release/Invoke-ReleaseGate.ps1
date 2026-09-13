@@ -5,8 +5,9 @@
   optional publication gate.
 
 .DESCRIPTION
-  Publication mode is intentionally strict: every gate runs and
-  PackagePlugins.ps1 publishes only after exact-ZIP consumer qualification.
+  Publication mode is intentionally strict: every gate runs and this script
+  publishes only after exact-ZIP consumer qualification. Releases remain
+  prereleases unless RJ has authorized -ApproveGoingLive.
   -PackageOnly is the local diagnostic mode and may use explicit skip switches.
 #>
 [CmdletBinding()]
@@ -17,6 +18,8 @@ param(
 	[string] $EngineRoot = 'C:\Program Files\Epic Games\UE_5.8',
 
 	[switch] $PackageOnly,
+
+	[switch] $ApproveGoingLive,
 
 	[switch] $SkipClientServer,
 
@@ -29,16 +32,17 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-function Test-SeinSemVer([string] $Candidate)
+function Test-SeinReleaseVersion([string] $Candidate)
 {
 	return $Candidate -match (
 		'^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)' +
+		'(?:\.(0|[1-9]\d*))?' +
 		'(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)' +
 		'(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?' +
 		'(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$')
 }
-if (-not (Test-SeinSemVer $Version)) {
-	throw "Version '$Version' is not a valid SemVer 2.0 version."
+if (-not (Test-SeinReleaseVersion $Version)) {
+	throw "Version '$Version' is invalid. Expected MAJOR.MINOR.UPDATE[.HOTFIX] with optional prerelease/build metadata."
 }
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $EngineRoot = (Resolve-Path -LiteralPath $EngineRoot).Path
@@ -636,7 +640,7 @@ function Get-VerifiedRemoteRelease(
 		return $null
 	}
 	$Remote = ($ViewOutput -join [Environment]::NewLine) | ConvertFrom-Json
-	$ExpectedPrerelease = $Version.Split('+')[0].Contains('-')
+	$ExpectedPrerelease = -not $ApproveGoingLive -or $Version.Split('+')[0].Contains('-')
 	if ([string]$Remote.tagName -cne "v$Version" -or
 		[string]$Remote.targetCommitish -cne $Commit -or
 		[bool]$Remote.isPrerelease -ne $ExpectedPrerelease) {
@@ -1194,7 +1198,7 @@ receipts are in ``SeinARTS-release-evidence.zip``.
 			'--title', "SeinARTS v$Version",
 			'--notes', $Notes,
 			'--draft')
-		if ($Version.Split('+')[0].Contains('-')) {
+		if (-not $ApproveGoingLive -or $Version.Split('+')[0].Contains('-')) {
 			$GhArguments += '--prerelease'
 		}
 		$RemoteRelease = Get-VerifiedRemoteRelease `
@@ -1221,15 +1225,6 @@ receipts are in ``SeinARTS-release-evidence.zip``.
 			if ($null -eq $RemoteRelease -or [bool]$RemoteRelease.isDraft) {
 				throw "Publishing the exact draft release returned exit code $PublishExitCode and did not produce a verified public release."
 			}
-		}
-		gh workflow run seinarts-update.yml -R RJPhenom/Consumer -f "tag=v$Version"
-		$DispatchExitCode = $LASTEXITCODE
-		$global:LASTEXITCODE = 0
-		if ($DispatchExitCode -ne 0) {
-			$Warning = "Release v$Version published, but the Consumer update dispatch failed with exit code $DispatchExitCode."
-			$Receipt.postPublicationWarnings += $Warning
-			Write-ReleaseGateReceipt
-			Write-Warning $Warning
 		}
 		}
 		finally {

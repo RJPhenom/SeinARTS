@@ -18,9 +18,9 @@
   Engine/Plugins/Marketplace while its dependents build, then removed again
   (exactly how FAB resolves plugin-on-plugin dependencies).
 
-  This helper never publishes. Scripts/Release/Invoke-ReleaseGate.ps1 is the only
-  publication entrypoint; it owns host builds, tests, exact-artifact consumer
-  qualification, immutable hash verification, evidence, and GitHub release creation.
+  This helper never publishes. Scripts/Release/Publish-Iteration.ps1 publishes
+  testing prereleases. Invoke-ReleaseGate.ps1 owns full milestone qualification:
+  host builds, tests, exact-artifact consumers, immutable hashes, and evidence.
 
 .EXAMPLE
   .\Scripts\PackagePlugins.ps1 -Version 1.2.0 -PackageOnly
@@ -80,10 +80,11 @@ if (-not $PackageOnly) {
     throw 'PackagePlugins.ps1 is package-only. Use Scripts/Release/Invoke-ReleaseGate.ps1 to qualify and publish, or pass -PackageOnly for diagnostics.'
 }
 
-function Test-SeinSemVer([string] $Candidate)
+function Test-SeinReleaseVersion([string] $Candidate)
 {
     return $Candidate -match (
         '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)' +
+        '(?:\.(0|[1-9]\d*))?' +
         '(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)' +
         '(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?' +
         '(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$')
@@ -116,8 +117,8 @@ if (-not $Version) {
     Write-Host "[PackagePlugins] no -Version given; using '$Version'" -ForegroundColor Yellow
 }
 
-if (-not (Test-SeinSemVer $Version)) {
-    throw "Version '$Version' is not a valid SemVer 2.0 version (expected MAJOR.MINOR.PATCH with optional prerelease/build metadata)."
+if (-not (Test-SeinReleaseVersion $Version)) {
+    throw "Version '$Version' is invalid (expected MAJOR.MINOR.UPDATE[.HOTFIX] with optional prerelease/build metadata)."
 }
 
 # --- Resolve the engine (same logic as Build.ps1) -----------------------------
@@ -240,9 +241,9 @@ try {
             -LiteralPath (Join-Path $engineCopy $StagingMarkerName) `
             -Encoding utf8
 
-        # Then strip what the shipped zip doesn't need: build scratch (Consumer
+        # Then strip what the shipped zip doesn't need: build scratch (consumers
         # recompiles project plugins from source, regenerating UHT headers),
-        # debug symbols, and regenerable baked level data (re-bake in Consumer).
+        # debug symbols, and regenerable baked level data (re-bake in the consumer).
         Remove-Item (Join-Path $out 'Intermediate') -Recurse -Force -ErrorAction SilentlyContinue
         if (Test-Path (Join-Path $out 'Binaries')) {
             Get-ChildItem (Join-Path $out 'Binaries') -Recurse -Filter '*.pdb' | Remove-Item -Force
@@ -252,7 +253,7 @@ try {
         }
 
         # Zip with the plugin folder as the zip root, so extracting into
-        # Consumer/Plugins/ yields Plugins/<Name>/ directly. (.NET 7+ writes
+        # a project's Plugins/ yields Plugins/<Name>/ directly. (.NET 7+ writes
         # forward-slash entry names - safe for unzip on the linux runner.)
         $zip = Join-Path $Dist "$p.zip"
         [System.IO.Compression.ZipFile]::CreateFromDirectory($out, $zip, 'Optimal', $true)

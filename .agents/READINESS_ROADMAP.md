@@ -2,9 +2,9 @@
 
 The north star is a native Unreal AAA RTS development experience: designer-first Blueprint authoring over a deterministic, modular, multiplayer-ready C++ foundation. Flexibility, extension stripping, exact state, and good development ergonomics are requirements, not later polish.
 
-The framework never decides which type of RTS a game is — that is the consuming game's call
-(the host Consumer project's own game is squad-tactical-inspired; the framework must equally
-support massive-scale designs, so mechanisms are sized for the largest scale). Combat is
+The framework never decides which type of RTS a game is — that is the consuming game's call.
+It must support both small tactical matches and massive-scale designs, so mechanisms are
+sized for the largest scale. Combat is
 designer-owned: the 2026-08-16 substrate (vitals/weapon schema, damage resolution, weapon
 cycling, projectiles, starter attack) was judged prescriptive and RE-CUT 2026-08-23 to a verb-only
 toolkit — `SeinARTSCombat` keeps only on-demand Find Targets / Check Target over a derived spatial

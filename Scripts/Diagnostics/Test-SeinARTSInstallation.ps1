@@ -145,10 +145,11 @@ function Get-SeinIniValue(
 	return $Result
 }
 
-function Test-SeinSemVer([string] $Value)
+function Test-SeinReleaseVersion([string] $Value)
 {
 	return $Value -match (
 		'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)' +
+		'(?:\.(0|[1-9][0-9]*))?' +
 		'(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)' +
 		'(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?' +
 		'(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$')
@@ -394,9 +395,9 @@ if ($ProjectJson -and $ProjectRoot) {
 		else {
 			$IntegrationMode = if ($InstalledModes[0]) { 'Release' } else { 'Source' }
 			if ($IntegrationMode -eq 'Release' -and $CohortVersion -and `
-				-not (Test-SeinSemVer $CohortVersion)) {
+				-not (Test-SeinReleaseVersion $CohortVersion)) {
 				Add-SeinFinding 'Error' 'SEIN042' `
-					"Release cohort version '$CohortVersion' is not SemVer 2.0." `
+					"Release cohort version '$CohortVersion' is not MAJOR.MINOR.UPDATE[.HOTFIX]." `
 					'Reinstall artifacts produced by the SeinARTS release gate.'
 			}
 		}

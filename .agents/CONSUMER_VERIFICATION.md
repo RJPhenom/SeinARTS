@@ -5,13 +5,13 @@ another Unreal project.” Generated consumers are disposable evidence, not sour
 
 ## Tool
 
-Consumer iteration delivery uses `Scripts/ReleaseConsumer.ps1`. The current release line is
-`0.3.x` (RJ, 2026-09-13): start at `0.3.0`, then advance the patch above existing tags in
-that line. Commit counts and hashes do not determine the public version. Failed attempts
-before a tag is created reuse the patch; a published tag is immutable and reserves it.
-The GitHub prerelease flag is separate from the version number and remains in place until
-going live is approved. Milestone qualification still uses the release gate below.
-Local-only syncs append `+local.<sha>` so they are distinguishable from published packages.
+Iteration publication uses `Scripts/Release/Publish-Iteration.ps1` with detailed release notes.
+The active line is `0.2.x`; crash or bug-only hotfixes may use `0.2.x.y`. Only RJ changes
+the first two digits. Existing tags reserve their number; failed attempts before a tag is
+created reuse the number. All builds remain prereleases until RJ approves going live.
+Consumer-specific installation and dispatch tools belong only in ignored local files.
+The framework repository and public release text must not name consuming projects.
+Milestone qualification still uses the release gate below.
 
 Run from the repository root:
 
@@ -81,7 +81,7 @@ header audit writes an exact header manifest and count into the consumer evidenc
 but it is not package evidence. `-SkipRuntimeQualification` and `-SkipClientServer` are diagnostic
 escapes, not complete release evidence.
 
-`Scripts/Release/Invoke-ReleaseGate.ps1` is the one release entrypoint. It runs Development Editor
+`Scripts/Release/Invoke-ReleaseGate.ps1` owns full milestone qualification. It runs Development Editor
 and Shipping builds, both test profiles across Unit/Integration/Determinism/Editor/Sim/Perf,
 fresh-process collision serial/parallel A/B, all six standalone packages, and the exact-artifact
 consumer matrix. The version-4 release receipt retains 14 test attempts (12 suite runs plus two
@@ -181,7 +181,7 @@ canonical root `9F9341D3859484A1F39663250732126D`; runtime receipt SHA-256 is
 `9380CE4D2F20D0D948BD58AB8939810EA4EEB4E628B2CE4EC2778368EC8A7CFA`.
 This run uses source inputs and the launcher-engine listen-server topology; public-header audit,
 Client/Server targets, adverse networking, and other consumer profiles were not qualified here.
-The intended Consumer delivery remains an iteration prerelease, not a milestone release-gate result.
+The intended publication remains an iteration prerelease, not a milestone release-gate result.
 
 The run exposed missing seamless-travel controller rebinding: the same valid client identity
 was rejected because the destination lobby never recovered its ownership records. Engine-handoff

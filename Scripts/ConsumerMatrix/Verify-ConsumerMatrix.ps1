@@ -152,10 +152,11 @@ function Get-ChildRelativePath([string] $Root, [string] $Path)
 	return $ResolvedPath.Substring($RequiredPrefix.Length)
 }
 
-function Test-SeinSemVer([string] $Version)
+function Test-SeinReleaseVersion([string] $Version)
 {
 	return $Version -match (
 		'^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)' +
+		'(?:\.(0|[1-9]\d*))?' +
 		'(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)' +
 		'(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?' +
 		'(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$')
@@ -363,8 +364,8 @@ function Initialize-ArtifactPluginSource([string] $Directory)
 			throw "Release descriptor '$DescriptorPath' is not stamped Installed:true."
 		}
 		$VersionName = [string]$Descriptor.VersionName
-		if (-not (Test-SeinSemVer $VersionName)) {
-			throw "Release descriptor '$DescriptorPath' has an invalid SemVer VersionName '$VersionName'."
+		if (-not (Test-SeinReleaseVersion $VersionName)) {
+			throw "Release descriptor '$DescriptorPath' has an invalid project VersionName '$VersionName'."
 		}
 		if ($null -eq $ExpectedVersion) {
 			$ExpectedVersion = $VersionName

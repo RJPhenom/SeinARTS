@@ -280,16 +280,38 @@ exit 0
     }
     finally { Remove-Item Function:\git }
     . (Join-Path $RepoRoot 'Scripts/Release/SeinReleaseVersion.ps1')
-    Check ((Resolve-SeinNextReleaseVersion @()) -eq '0.3.0') 'New release line starts at patch zero'
-    Check ((Resolve-SeinNextReleaseVersion @('v0.2.0','v0.0.331-gca8b871')) -eq '0.3.0') 'Legacy commit counts cannot override the selected release line'
-    Check ((Resolve-SeinNextReleaseVersion @('v0.3.0')) -eq '0.3.1') 'Published patch advances the next version'
-    Check ((Resolve-SeinNextReleaseVersion @('v0.3.2','v0.3.10','v0.3.9')) -eq '0.3.11') 'Patch ordering is numeric'
-    Check ((Resolve-SeinNextReleaseVersion @('v0.3.4-rc.1','v0.3.2')) -eq '0.3.5') 'Prerelease tags reserve their patch'
-    Check ((Resolve-SeinNextReleaseVersion @('unrelated','v0.3.01')) -eq '0.3.0') 'Unrelated and noncanonical tags are ignored'
+    Check ((Resolve-SeinNextReleaseVersion @()) -eq '0.2.0') 'New release line starts at update zero'
+    Check ((Resolve-SeinNextReleaseVersion @('v0.2.0','v0.0.331-gca8b871')) -eq '0.2.1') 'Legacy commit counts cannot override the selected release line'
+    Check ((Resolve-SeinNextReleaseVersion @('v0.2.1')) -eq '0.2.2') 'Published update advances the third digit'
+    Check ((Resolve-SeinNextReleaseVersion @('v0.2.2','v0.2.10','v0.2.9')) -eq '0.2.11') 'Update ordering is numeric'
+    Check ((Resolve-SeinNextReleaseVersion @('v0.2.4-rc.1','v0.2.2')) -eq '0.2.5') 'Prerelease tags reserve their update'
+    Check ((Resolve-SeinNextReleaseVersion @('unrelated','v0.2.01')) -eq '0.2.0') 'Unrelated and noncanonical tags are ignored'
+    Check ((Resolve-SeinNextReleaseVersion @('v0.2.1') -Hotfix) -eq '0.2.1.1') 'First bug hotfix advances only the fourth digit'
+    Check ((Resolve-SeinNextReleaseVersion @('v0.2.1.9','v0.2.1.10','v0.2.1.2') -Hotfix) -eq '0.2.1.11') 'Hotfix ordering is numeric'
+    Check ((Resolve-SeinNextReleaseVersion @('v0.2.1.9','v0.2.2') -Hotfix) -eq '0.2.2.1') 'A new update resets the hotfix sequence'
+    Check ((Resolve-SeinNextReleaseVersion @('v0.2.1.9')) -eq '0.2.2') 'Normal updates advance past existing hotfixes'
+    $Rejected=$false
+    try { Resolve-SeinNextReleaseVersion @() -Hotfix | Out-Null } catch { $Rejected=$true }
+    Check $Rejected 'Hotfixes require an existing release'
     $Rejected=$false
     try { Resolve-SeinNextReleaseVersion @('v0.4.0') | Out-Null } catch { $Rejected=$true }
     Check $Rejected 'A newer release line prevents automatic version regression'
-    Check ((Resolve-SeinNextReleaseVersion @('v0.3.8') -ReleaseLine '0.4') -eq '0.4.0') 'An explicitly selected minor starts at patch zero'
+    Check ((Resolve-SeinNextReleaseVersion @('v0.2.8') -ReleaseLine '0.4') -eq '0.4.0') 'Only an explicitly selected line changes the first two digits'
+    foreach ($ValidatorFile in @('Scripts/PackagePlugins.ps1',
+        'Scripts/Release/Invoke-ReleaseGate.ps1',
+        'Scripts/ConsumerMatrix/Verify-ConsumerMatrix.ps1',
+        'Scripts/Diagnostics/Test-SeinARTSInstallation.ps1')) {
+        $ValidatorAst=[System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $RepoRoot $ValidatorFile),[ref]$null,[ref]$null)
+        $Validator=$ValidatorAst.Find({param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'Test-SeinReleaseVersion'},$true)
+        . ([scriptblock]::Create($Validator.Extent.Text))
+        foreach ($Valid in @('0.2.1','0.2.1.1','0.2.1.12','0.2.1.1-rc.1+local.abc','1.2.3-alpha.1+build.5')) {
+            Check (Test-SeinReleaseVersion $Valid) "$ValidatorFile accepts $Valid"
+        }
+        foreach ($Invalid in @('0.2','0.2.1.01','0.2.1.1.1','0.2.1-01','0.2.1.-1')) {
+            Check (-not (Test-SeinReleaseVersion $Invalid)) "$ValidatorFile rejects $Invalid"
+        }
+    }
     [ordered]@{status='Passed';shell=$Shell;checks=@($Checks);fixtureRoot=$Fixture} |
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Root 'self-test-result.json')
     Write-Host "[ValidationSelfTest] Passed $($Checks.Count) checks. Receipt: $Root/self-test-result.json"

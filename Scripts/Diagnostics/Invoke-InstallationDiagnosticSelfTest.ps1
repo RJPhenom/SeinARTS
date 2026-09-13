@@ -103,6 +103,15 @@ try {
 		throw 'Valid nested release fixture did not produce the expected pass receipt.'
 	}
 
+	foreach ($DescriptorFile in Get-ChildItem -LiteralPath $PassProject -Filter '*.uplugin' -Recurse) {
+		$Descriptor = Get-Content -Raw -LiteralPath $DescriptorFile.FullName | ConvertFrom-Json
+		$Descriptor.VersionName = '0.2.1.1'
+		Write-Json $DescriptorFile.FullName $Descriptor
+	}
+	$Hotfix = Invoke-Diagnostic (Join-Path $PassProject 'Game.uproject') $PassEngine
+	if ($Hotfix.ExitCode -ne 0 -or [string]$Hotfix.Report.cohortVersion -cne '0.2.1.1') {
+		throw 'Four-part bug-hotfix cohort did not pass installation diagnostics.'
+	}
 	foreach ($RecoveryPath in @('None', '/Game/Missing.Manifest', '/Game/../Config/Foo.Foo')) {
 		Write-Utf8NoBom (Join-Path $PassProject 'Config\DefaultGame.ini') (
 			"[/Script/SeinARTSCoreEntity.SeinARTSCoreSettings]`r`nSimulationContentManifest=$RecoveryPath`r`n")
