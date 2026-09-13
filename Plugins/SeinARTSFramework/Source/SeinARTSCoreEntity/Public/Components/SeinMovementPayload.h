@@ -17,6 +17,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Templates/SubclassOf.h"
 #include "Abilities/SeinAbility.h"
 #include "Components/SeinPayload.h"
 #include "StructUtils/InstancedStruct.h"

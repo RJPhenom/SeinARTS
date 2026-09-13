@@ -16,6 +16,7 @@
 #include "Input/SeinCommand.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "UObject/Stack.h"
+#include "UObject/Package.h"
 #include "Blueprint/BlueprintExceptionInfo.h"
 #include "UObject/UnrealType.h"
 

@@ -194,6 +194,10 @@ The staged-new-file check subsequently removed surplus terminal blank lines from
 files only. Final Editor (`Saved/Build/e6b2c199768b411b87e516e9c2c78e14/build-result.json`) and
 Shipping (`Saved/Build/04ad11826f2844ebabfe03772df8c569/build-result.json`) builds passed afterward;
 no behavior changed after the full suite run.
+Standalone BuildPlugin subsequently exposed missing direct `UObject/Package.h` includes in ability
+input construction and `Templates/SubclassOf.h` in the movement payload. Adding those dependencies
+fixed the isolated UnrealGame Development target (`Saved/Validation/Checkpoint-IsolatedRuntimeBuild.log`,
+exit 0); these are compile-boundary fixes, with no gameplay logic change.
 
 The generated projects, packages, logs, and temporary Python scripts are regenerable and should be
 deleted after evidence is recorded. Do not commit `Saved/ConsumerMatrix`.

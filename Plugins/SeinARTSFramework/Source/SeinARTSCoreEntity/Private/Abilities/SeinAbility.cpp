@@ -15,6 +15,7 @@
  */
 
 #include "Abilities/SeinAbility.h"
+#include "UObject/Package.h"
 #include "UObject/UnrealType.h"
 #include "Simulation/SeinWorldSubsystem.h"
 #include "Abilities/SeinLatentActionManager.h"
